@@ -19,10 +19,7 @@ use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, TxHash};
 use flume::{Sender, TrySendError};
 
-use super::{
-    state::{EthTxPoolBridgeStateView, TxStatusReceiverSender},
-    TxStatus,
-};
+use monad_eth_txpool_types::{EthTxPoolBridgeStateView, TxStatus, TxStatusReceiverSender};
 
 #[derive(Clone)]
 pub struct EthTxPoolBridgeClient {

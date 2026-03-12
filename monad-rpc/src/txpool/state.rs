@@ -13,244 +13,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
-    time::Duration,
+pub use monad_eth_txpool_types::{
+    EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState, EthTxPoolBridgeStateView,
+    TxStatusReceiverSender,
 };
-
-use alloy_consensus::TxEnvelope;
-use alloy_primitives::{Address, TxHash};
-use dashmap::{DashMap, Entry};
-use monad_eth_txpool_types::{EthTxPoolEvent, EthTxPoolEventType, EthTxPoolSnapshot};
-use tokio::time::Instant;
-
-use super::TxStatus;
-
-const TX_EVICT_DURATION_SECONDS: u64 = 15 * 60;
-
-pub(super) type EthTxPoolBridgeEvictionQueue = VecDeque<(Instant, TxHash)>;
-pub(super) type TxStatusReceiverSender =
-    tokio::sync::oneshot::Sender<tokio::sync::watch::Receiver<TxStatus>>;
-
-#[derive(Clone)]
-pub struct EthTxPoolBridgeStateView {
-    status: Arc<DashMap<TxHash, tokio::sync::watch::Sender<TxStatus>>>,
-    address_hashes: Arc<DashMap<Address, HashSet<TxHash>>>,
-}
-
-impl EthTxPoolBridgeStateView {
-    pub fn get_status_by_hash(&self, hash: &TxHash) -> Option<TxStatus> {
-        Some(self.status.get(hash)?.value().borrow().to_owned())
-    }
-
-    pub(super) fn get_status_by_address(
-        &self,
-        address: &Address,
-    ) -> Option<HashMap<TxHash, TxStatus>> {
-        let hashes = self.address_hashes.get(address)?.value().to_owned();
-
-        let statuses = hashes
-            .into_iter()
-            .flat_map(|hash| {
-                let status = self.status.get(&hash)?.value().borrow().to_owned();
-                Some((hash, status))
-            })
-            .collect();
-
-        Some(statuses)
-    }
-
-    pub fn for_testing() -> Self {
-        Self {
-            status: Default::default(),
-            address_hashes: Default::default(),
-        }
-    }
-}
-
-pub struct EthTxPoolBridgeState {
-    status: Arc<DashMap<TxHash, tokio::sync::watch::Sender<TxStatus>>>,
-    hash_address: Arc<DashMap<TxHash, Address>>,
-    address_hashes: Arc<DashMap<Address, HashSet<TxHash>>>,
-}
-
-impl EthTxPoolBridgeState {
-    pub fn new(
-        eviction_queue: &mut EthTxPoolBridgeEvictionQueue,
-        snapshot: EthTxPoolSnapshot,
-    ) -> Self {
-        let this = Self {
-            status: Default::default(),
-            hash_address: Default::default(),
-            address_hashes: Default::default(),
-        };
-
-        this.apply_snapshot(eviction_queue, snapshot);
-
-        this
-    }
-
-    pub(super) fn create_view(&self) -> EthTxPoolBridgeStateView {
-        EthTxPoolBridgeStateView {
-            status: Arc::clone(&self.status),
-            address_hashes: Arc::clone(&self.address_hashes),
-        }
-    }
-
-    pub(super) fn add_tx(
-        &self,
-        eviction_queue: &mut EthTxPoolBridgeEvictionQueue,
-        tx: &TxEnvelope,
-        tx_status_recv_send: TxStatusReceiverSender,
-    ) -> bool {
-        let hash = *tx.tx_hash();
-
-        match self.status.entry(hash) {
-            Entry::Occupied(mut o) => {
-                let mut receiver = o.get_mut().subscribe();
-
-                let known = match &*receiver.borrow() {
-                    TxStatus::Unknown => false,
-                    TxStatus::Tracked
-                    | TxStatus::Dropped { .. }
-                    | TxStatus::Evicted { .. }
-                    | TxStatus::Committed => true,
-                };
-
-                if known {
-                    receiver.mark_changed();
-                }
-
-                let _ = tx_status_recv_send.send(receiver);
-
-                !known
-            }
-            Entry::Vacant(v) => {
-                let (sender, receiver) = tokio::sync::watch::channel(TxStatus::Unknown);
-
-                v.insert(sender);
-                eviction_queue.push_back((Instant::now(), hash));
-
-                let _ = tx_status_recv_send.send(receiver);
-
-                true
-            }
-        }
-    }
-
-    pub(super) fn apply_snapshot(
-        &self,
-        eviction_queue: &mut EthTxPoolBridgeEvictionQueue,
-        snapshot: EthTxPoolSnapshot,
-    ) {
-        let EthTxPoolSnapshot { mut txs } = snapshot;
-
-        let now = Instant::now();
-
-        eviction_queue.clear();
-
-        self.status.retain(|tx_hash, status| {
-            if txs.remove(tx_hash) {
-                status.send_if_modified(|tx_status| {
-                    *tx_status = TxStatus::Tracked;
-                    false
-                });
-                eviction_queue.push_back((now, *tx_hash));
-                return true;
-            }
-
-            let Some((tx_hash, address)) = self.hash_address.remove(tx_hash) else {
-                return false;
-            };
-
-            self.address_hashes.entry(address).and_modify(|hashes| {
-                hashes.remove(&tx_hash);
-            });
-
-            false
-        });
-
-        for tx_hash in txs {
-            self.status
-                .insert(tx_hash, tokio::sync::watch::channel(TxStatus::Tracked).0);
-            eviction_queue.push_back((now, tx_hash));
-        }
-
-        // note that self.hash_addresses and self.address_hashes aren't populated for snapshots
-    }
-
-    pub(super) fn handle_events(
-        &self,
-        eviction_queue: &mut EthTxPoolBridgeEvictionQueue,
-        events: Vec<EthTxPoolEvent>,
-    ) {
-        let now = Instant::now();
-
-        let mut insert = |tx_hash, tx_status: TxStatus| {
-            match self.status.entry(tx_hash) {
-                Entry::Occupied(mut o) => {
-                    o.get_mut().send_replace(tx_status);
-                }
-                Entry::Vacant(v) => {
-                    v.insert(tokio::sync::watch::channel(tx_status).0);
-                    eviction_queue.push_back((now, tx_hash));
-                }
-            };
-        };
-
-        for EthTxPoolEvent { tx_hash, action } in events {
-            match action {
-                EthTxPoolEventType::Insert {
-                    address,
-                    owned: _,
-                    tx: _,
-                } => {
-                    insert(tx_hash, TxStatus::Tracked);
-
-                    self.hash_address.entry(tx_hash).insert(address);
-                    self.address_hashes
-                        .entry(address)
-                        .or_default()
-                        .insert(tx_hash);
-                }
-                EthTxPoolEventType::Commit => {
-                    insert(tx_hash, TxStatus::Committed);
-                }
-                EthTxPoolEventType::Drop { reason } => {
-                    insert(tx_hash, TxStatus::Dropped { reason });
-                }
-                EthTxPoolEventType::Evict { reason } => {
-                    insert(tx_hash, TxStatus::Evicted { reason });
-                }
-            }
-        }
-    }
-
-    pub(super) fn cleanup(&self, eviction_queue: &mut EthTxPoolBridgeEvictionQueue, now: Instant) {
-        while eviction_queue
-            .front()
-            .map(|entry| {
-                now.duration_since(entry.0) >= Duration::from_secs(TX_EVICT_DURATION_SECONDS)
-            })
-            .unwrap_or_default()
-        {
-            let (_, hash) = eviction_queue.pop_front().unwrap();
-
-            if self.status.remove(&hash).is_none() {
-                continue;
-            }
-
-            if let Some((hash, address)) = self.hash_address.remove(&hash) {
-                if let Some(mut address_hashes) = self.address_hashes.get_mut(&address) {
-                    address_hashes.remove(&hash);
-                }
-            }
-        }
-
-        self.address_hashes.retain(|_, hashes| !hashes.is_empty());
-    }
-}
 
 #[cfg(test)]
 mod test {
@@ -259,17 +25,13 @@ mod test {
     use alloy_consensus::{transaction::SignerRecoverable, TxEnvelope};
     use monad_eth_testutil::{make_legacy_tx, S1};
     use monad_eth_txpool_types::{
+        EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState, EthTxPoolBridgeStateView,
         EthTxPoolDropReason, EthTxPoolEvent, EthTxPoolEventType, EthTxPoolEvictReason,
-        EthTxPoolSnapshot,
+        EthTxPoolSnapshot, TxStatus,
     };
     use tokio::time::Instant;
 
-    use super::EthTxPoolBridgeStateView;
-    use crate::txpool::{
-        state::{EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState, TX_EVICT_DURATION_SECONDS},
-        TxStatus,
-    };
-
+    const TX_EVICT_DURATION_SECONDS: u64 = 15 * 60;
     const BASE_FEE_PER_GAS: u64 = 100_000_000_000;
 
     fn setup() -> (
@@ -296,13 +58,14 @@ mod test {
     async fn test_create_view_linked() {
         let (state, state_view, mut eviction_queue, tx) = setup();
 
-        assert_eq!(state.status.len(), 0);
-        assert_eq!(state_view.status.len(), 0);
+        assert_eq!(state_view.get_status_by_hash(tx.tx_hash()), None);
 
         state.add_tx(&mut eviction_queue, &tx, tokio::sync::oneshot::channel().0);
 
-        assert_eq!(state.status.len(), 1);
-        assert_eq!(state_view.status.len(), 1);
+        assert_eq!(
+            state_view.get_status_by_hash(tx.tx_hash()),
+            Some(TxStatus::Unknown)
+        );
     }
 
     #[tokio::test]
@@ -541,15 +304,21 @@ mod test {
             let (state, state_view, mut eviction_queue, tx) = setup();
 
             assert_eq!(eviction_queue.len(), 0);
-            assert_eq!(state_view.status.len(), 0);
+            assert_eq!(state_view.get_status_by_hash(tx.tx_hash()), None);
 
             state.add_tx(&mut eviction_queue, &tx, tokio::sync::oneshot::channel().0);
             assert_eq!(eviction_queue.len(), 1);
-            assert_eq!(state_view.status.len(), 1);
+            assert_eq!(
+                state_view.get_status_by_hash(tx.tx_hash()),
+                Some(TxStatus::Unknown)
+            );
 
             state.cleanup(&mut eviction_queue, Instant::now());
             assert_eq!(eviction_queue.len(), 1);
-            assert_eq!(state_view.status.len(), 1);
+            assert_eq!(
+                state_view.get_status_by_hash(tx.tx_hash()),
+                Some(TxStatus::Unknown)
+            );
 
             tokio::time::advance(
                 Duration::from_secs(TX_EVICT_DURATION_SECONDS)
@@ -560,23 +329,32 @@ mod test {
 
             state.cleanup(&mut eviction_queue, Instant::now());
             assert_eq!(eviction_queue.len(), 1);
-            assert_eq!(state_view.status.len(), 1);
+            assert_eq!(
+                state_view.get_status_by_hash(tx.tx_hash()),
+                Some(TxStatus::Unknown)
+            );
 
             if add_duplicate_tx {
                 state.add_tx(&mut eviction_queue, &tx, tokio::sync::oneshot::channel().0);
                 assert_eq!(eviction_queue.len(), 1);
-                assert_eq!(state_view.status.len(), 1);
+                assert_eq!(
+                    state_view.get_status_by_hash(tx.tx_hash()),
+                    Some(TxStatus::Unknown)
+                );
 
                 state.cleanup(&mut eviction_queue, Instant::now());
                 assert_eq!(eviction_queue.len(), 1);
-                assert_eq!(state_view.status.len(), 1);
+                assert_eq!(
+                    state_view.get_status_by_hash(tx.tx_hash()),
+                    Some(TxStatus::Unknown)
+                );
             }
 
             tokio::time::advance(Duration::from_millis(1)).await;
 
             state.cleanup(&mut eviction_queue, Instant::now());
             assert_eq!(eviction_queue.len(), 0);
-            assert_eq!(state_view.status.len(), 0);
+            assert_eq!(state_view.get_status_by_hash(tx.tx_hash()), None);
         }
     }
 }

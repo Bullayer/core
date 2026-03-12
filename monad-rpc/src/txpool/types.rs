@@ -13,18 +13,4 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use monad_eth_txpool_types::{EthTxPoolDropReason, EthTxPoolEvictReason};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum TxStatus {
-    // No response
-    Unknown,
-
-    // Alive
-    Tracked,
-
-    // Dead
-    Dropped { reason: EthTxPoolDropReason },
-    Evicted { reason: EthTxPoolEvictReason },
-    Committed,
-}
+pub use monad_eth_txpool_types::TxStatus;

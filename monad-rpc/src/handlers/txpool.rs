@@ -20,8 +20,10 @@ use monad_eth_txpool_types::EthTxPoolEvictReason;
 use monad_rpc_docs::rpc;
 use serde::{Deserialize, Serialize};
 
+use monad_eth_txpool_types::TxStatus;
+
 use crate::{
-    txpool::{EthTxPoolBridgeClient, TxStatus},
+    txpool::EthTxPoolBridgeClient,
     types::{
         eth_json::{EthAddress, EthHash},
         jsonrpc::{JsonRpcError, JsonRpcResult},

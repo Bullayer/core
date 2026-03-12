@@ -23,17 +23,15 @@ use alloy_consensus::TxEnvelope;
 use flume::Receiver;
 use futures::{SinkExt, StreamExt};
 use monad_eth_txpool_ipc::EthTxPoolIpcClient;
-use monad_eth_txpool_types::EthTxPoolIpcTx;
-use state::TxStatusReceiverSender;
+use monad_eth_txpool_types::{EthTxPoolIpcTx, TxStatusReceiverSender};
 use tracing::{debug, error, info, warn};
 
 pub use self::{client::EthTxPoolBridgeClient, handle::EthTxPoolBridgeHandle, types::TxStatus};
-use self::{
-    socket::SocketWatcher,
-    state::{EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState},
-};
+use monad_eth_txpool_types::{EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState};
+use self::socket::SocketWatcher;
 use crate::txpool::socket::SocketWatcherEvent;
 
+pub mod channel_bridge;
 mod client;
 mod handle;
 mod socket;

@@ -25,9 +25,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, trace, warn};
 
+use monad_eth_txpool_types::TxStatus;
+
 use crate::{
     chainstate::{ChainState, ChainStateError},
-    txpool::{EthTxPoolBridgeClient, TxStatus},
+    txpool::EthTxPoolBridgeClient,
     types::{
         eth_json::{
             BlockTagOrHash, BlockTags, EthHash, MonadLog, MonadTransaction,

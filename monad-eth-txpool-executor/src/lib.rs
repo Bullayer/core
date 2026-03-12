@@ -37,6 +37,7 @@ use monad_eth_txpool::{
     EthTxPool, EthTxPoolConfig, EthTxPoolEventTracker, PoolTxKind, TrackedTxLimitsConfig,
 };
 use monad_eth_txpool_types::{
+    EthTxPoolBridgeEvictionQueue, EthTxPoolBridgeState, EthTxPoolBridgeStateView,
     EthTxPoolDropReason, EthTxPoolEventType, EthTxPoolIpcTx, EthTxPoolTxInputStream,
 };
 use monad_eth_types::{EthExecutionProtocol, ExtractEthAddress};
@@ -50,13 +51,18 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::{sync::mpsc, time::Instant};
 use tracing::{debug, debug_span, error, info, trace_span, warn};
 
-pub use self::{client::EthTxPoolExecutorClient, ipc::EthTxPoolIpcConfig};
+pub use self::{
+    channel::{EthTxPoolChannelInputStream, EthTxPoolChannelTxSender},
+    client::EthTxPoolExecutorClient,
+    ipc::EthTxPoolIpcConfig,
+};
 use self::{
     client::ForwardedTxs, forward::EthTxPoolForwardingManager, ipc::EthTxPoolIpcServer,
     metrics::EthTxPoolExecutorMetrics, preload::EthTxPoolPreloadManager,
     reset::EthTxPoolResetTrigger,
 };
 
+pub mod channel;
 mod client;
 pub mod forward;
 mod ipc;
@@ -91,6 +97,75 @@ where
     executor_metrics: ExecutorMetrics,
 
     _phantom: PhantomData<CRT>,
+}
+
+impl<ST, SCT, SBT, CCT, CRT, TIS> EthTxPoolExecutor<ST, SCT, SBT, CCT, CRT, TIS>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+    CertificateSignaturePubKey<ST>: ExtractEthAddress,
+    SBT: StateBackend<ST, SCT> + Send + 'static,
+    CCT: ChainConfig<CRT> + Send + 'static,
+    CRT: ChainRevision + Send + 'static,
+    TIS: EthTxPoolTxInputStream,
+    Self: Unpin,
+{
+    async fn run(
+        mut self,
+        mut command_rx: mpsc::Receiver<
+            Vec<
+                TxPoolCommand<
+                    ST,
+                    SCT,
+                    EthExecutionProtocol,
+                    EthBlockPolicy<ST, SCT, CCT, CRT>,
+                    SBT,
+                    CCT,
+                    CRT,
+                >,
+            >,
+        >,
+        mut forwarded_rx: mpsc::Receiver<Vec<ForwardedTxs<SCT>>>,
+        event_tx: mpsc::Sender<MonadEvent<ST, SCT, EthExecutionProtocol>>,
+    ) {
+        use futures::StreamExt;
+
+        loop {
+            tokio::select! {
+                biased;
+
+                result = command_rx.recv() => {
+                    let Some(commands) = result else {
+                        warn!("command channel was dropped, shutting down txpool executor");
+                        break;
+                    };
+
+                    self.exec(commands);
+                }
+
+                result = self.next() => {
+                    let Some(event) = result else {
+                        error!("txpool executor stream terminated, shutting down txpool executor");
+                        continue;
+                    };
+
+                    if let Err(err) = event_tx.send(event).await {
+                        warn!(?err, "failed to send event to BFT, shutting down txpool executor");
+                        break;
+                    }
+                }
+
+                result = forwarded_rx.recv() => {
+                    let Some(forwarded_txs) = result else {
+                        warn!("forwarded channel was dropped, shutting down txpool executor");
+                        break;
+                    };
+
+                    self.process_forwarded_txs(forwarded_txs);
+                }
+            }
+        }
+    }
 }
 
 impl<ST, SCT, SBT, CCT, CRT> EthTxPoolExecutor<ST, SCT, SBT, CCT, CRT, EthTxPoolIpcServer>
@@ -170,62 +245,102 @@ where
             }),
         ))
     }
+}
 
-    async fn run(
-        mut self,
-        mut command_rx: mpsc::Receiver<
-            Vec<
-                TxPoolCommand<
-                    ST,
-                    SCT,
-                    EthExecutionProtocol,
-                    EthBlockPolicy<ST, SCT, CCT, CRT>,
-                    SBT,
-                    CCT,
-                    CRT,
-                >,
-            >,
-        >,
-        mut forwarded_rx: mpsc::Receiver<Vec<ForwardedTxs<SCT>>>,
-        event_tx: mpsc::Sender<MonadEvent<ST, SCT, EthExecutionProtocol>>,
+impl<ST, SCT, SBT, CCT, CRT>
+    EthTxPoolExecutor<ST, SCT, SBT, CCT, CRT, EthTxPoolChannelInputStream>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+    CertificateSignaturePubKey<ST>: ExtractEthAddress,
+    SBT: StateBackend<ST, SCT> + Send + 'static,
+    CCT: ChainConfig<CRT> + Send + 'static,
+    CRT: ChainRevision + Send + 'static,
+    Self: Unpin,
+{
+    pub fn start_with_channel(
+        block_policy: EthBlockPolicy<ST, SCT, CCT, CRT>,
+        state_backend: SBT,
+        soft_tx_expiry: Duration,
+        hard_tx_expiry: Duration,
+        chain_config: CCT,
+        round: Round,
+        execution_timestamp_s: u64,
+    ) -> (
+        EthTxPoolExecutorClient<ST, SCT, SBT, CCT, CRT>,
+        EthTxPoolChannelTxSender,
+        EthTxPoolBridgeState,
+        EthTxPoolBridgeStateView,
+        Arc<std::sync::Mutex<EthTxPoolBridgeEvictionQueue>>,
     ) {
-        use futures::StreamExt;
+        let (tx_sender, rx) = mpsc::channel(8192);
+        let eviction_queue = Arc::new(std::sync::Mutex::new(EthTxPoolBridgeEvictionQueue::default()));
+        let state = EthTxPoolBridgeState::new_empty();
+        let state_view = state.create_view();
+        let state_for_bridge = state.clone();
 
-        loop {
-            tokio::select! {
-                biased;
+        let channel_input = Box::pin(EthTxPoolChannelInputStream::new(
+            rx,
+            state,
+            eviction_queue.clone(),
+        ));
 
-                result = command_rx.recv() => {
-                    let Some(commands) = result else {
-                        warn!("command channel was dropped, shutting down txpool executor");
-                        break;
-                    };
+        let (events_tx, events) = mpsc::unbounded_channel();
 
-                    self.exec(commands);
-                }
+        let metrics = Arc::new(EthTxPoolExecutorMetrics::default());
+        let mut executor_metrics = ExecutorMetrics::default();
 
-                result = self.next() => {
-                    let Some(event) = result else {
-                        error!("txpool executor stream terminated, shutting down txpool executor");
-                        continue;
-                    };
+        metrics.update(&mut executor_metrics);
 
-                    if let Err(err) = event_tx.send(event).await {
-                        warn!(?err, "failed to send event to BFT, shutting down txpool executor");
-                        break;
+        let client = EthTxPoolExecutorClient::new(
+            {
+                let metrics = metrics.clone();
+
+                move |command_rx, forwarded_rx, event_tx| {
+                    let pool = EthTxPool::new(
+                        EthTxPoolConfig {
+                            limits: TrackedTxLimitsConfig::new(
+                                None,
+                                None,
+                                None,
+                                None,
+                                soft_tx_expiry,
+                                hard_tx_expiry,
+                            ),
+                        },
+                        chain_config.chain_id(),
+                        chain_config.get_chain_revision(round),
+                        chain_config.get_execution_chain_revision(execution_timestamp_s),
+                    );
+
+                    Self {
+                        pool,
+                        tx_input_stream: channel_input,
+                        block_policy,
+                        reset: EthTxPoolResetTrigger::default(),
+                        state_backend,
+                        chain_config,
+
+                        events_tx,
+                        events,
+
+                        forwarding_manager: Box::pin(EthTxPoolForwardingManager::default()),
+                        preload_manager: Box::pin(EthTxPoolPreloadManager::default()),
+
+                        metrics,
+                        executor_metrics,
+
+                        _phantom: PhantomData,
                     }
+                    .run(command_rx, forwarded_rx, event_tx)
                 }
+            },
+            Box::new(move |executor_metrics: &mut ExecutorMetrics| {
+                metrics.update(executor_metrics)
+            }),
+        );
 
-                result = forwarded_rx.recv() => {
-                    let Some(forwarded_txs) = result else {
-                        warn!("forwarded channel was dropped, shutting down txpool executor");
-                        break;
-                    };
-
-                    self.process_forwarded_txs(forwarded_txs);
-                }
-            }
-        }
+        (client, tx_sender, state_for_bridge, state_view, eviction_queue)
     }
 }
 
@@ -407,7 +522,7 @@ where
                         }
                     }
                 }
-                TxPoolCommand::InsertForwardedTxs { sender, txs } => {
+                TxPoolCommand::InsertForwardedTxs { sender: _, txs: _ } => {
                     // This will never happen because we separate out these commands in `EthTxPoolExecutorClient`.
                     error!("txpool executor received InsertForwardedTxs command over command rx");
                 }

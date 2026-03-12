@@ -14,4 +14,6 @@ monad-eth-block-policy = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
+dashmap = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }

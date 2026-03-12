@@ -37,7 +37,8 @@ use monad_crypto::certificate_signature::{
 use monad_dataplane::{DataplaneBuilder, TcpSocketId, UdpSocketId};
 use monad_eth_block_policy::EthBlockPolicy;
 use monad_eth_block_validator::EthBlockValidator;
-use monad_eth_txpool_executor::{EthTxPoolExecutor, EthTxPoolIpcConfig};
+use monad_eth_txpool_executor::EthTxPoolExecutor;
+use monad_rpc::txpool::channel_bridge::EthTxPoolChannelBridge;
 use monad_executor::{Executor, ExecutorMetricsChain};
 use monad_executor_glue::{LogFriendlyMonadEvent, Message, MonadEvent};
 use monad_ledger::MonadBlockFileLedger;
@@ -240,29 +241,36 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             state_backend.clone(),
         ),
         timestamp: TokioTimestamp::new(Duration::from_millis(5), 100, 10001),
-        txpool: EthTxPoolExecutor::start(
-            create_block_policy(),
-            state_backend.clone(),
-            EthTxPoolIpcConfig {
-                bind_path: node_state.mempool_ipc_path,
-                tx_batch_size: node_state.node_config.ipc_tx_batch_size as usize,
-                max_queued_batches: node_state.node_config.ipc_max_queued_batches as usize,
-                queued_batches_watermark: node_state.node_config.ipc_queued_batches_watermark
-                    as usize,
-            },
-            // TODO(andr-dev): Add tx_expiry to node config
-            Duration::from_secs(15),
-            Duration::from_secs(5 * 60),
-            node_state.chain_config,
-            node_state
-                .forkpoint_config
-                .high_certificate
-                .qc()
-                .get_round(),
-            // TODO(andr-dev): Use timestamp from last commit in ledger
-            0,
-        )
-        .expect("txpool ipc succeeds"),
+        txpool: {
+            let (txpool_client, channel_tx_sender, bridge_state, state_view, eviction_queue) =
+                EthTxPoolExecutor::start_with_channel(
+                    create_block_policy(),
+                    state_backend.clone(),
+                    // TODO(andr-dev): Add tx_expiry to node config
+                    Duration::from_secs(15),
+                    Duration::from_secs(5 * 60),
+                    node_state.chain_config,
+                    node_state
+                        .forkpoint_config
+                        .high_certificate
+                        .qc()
+                        .get_round(),
+                    // TODO(andr-dev): Use timestamp from last commit in ledger
+                    0,
+                );
+
+            let (_txpool_bridge_client, _bridge_handle) = EthTxPoolChannelBridge::start(
+                channel_tx_sender,
+                state_view,
+                bridge_state,
+                eviction_queue,
+            );
+
+            // TODO: Start RPC server in-process with _txpool_bridge_client
+            // tokio::spawn(monad_rpc::start_rpc_server(rpc_args, node_name, chain_id, Some(_txpool_bridge_client)));
+
+            txpool_client
+        },
         control_panel: ControlPanelIpcReceiver::new(
             node_state.control_panel_ipc_path,
             node_state.reload_handle,

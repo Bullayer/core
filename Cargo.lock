@@ -5432,8 +5432,10 @@ dependencies = [
  "alloy-consensus",
  "alloy-primitives",
  "alloy-rlp",
+ "dashmap",
  "monad-eth-block-policy",
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -5687,6 +5689,7 @@ dependencies = [
  "monad-pprof",
  "monad-raptorcast",
  "monad-router-multi",
+ "monad-rpc",
  "monad-secp",
  "monad-state",
  "monad-state-backend",
