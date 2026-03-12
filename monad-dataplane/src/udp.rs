@@ -21,14 +21,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bytes::{Bytes, BytesMut};
+#[cfg(target_os = "linux")]
+use bytes::Bytes;
+use bytes::BytesMut;
 use futures::future::join_all;
 use monad_types::UdpPriority;
-use monoio::{
-    buf::{Ipv4RecvMsgParser, UserRecvMsgRingBuf},
-    net::udp::UdpSocket,
-    spawn, time,
-};
+#[cfg(target_os = "linux")]
+use monoio::buf::{Ipv4RecvMsgParser, UserRecvMsgRingBuf};
+use monoio::{net::udp::UdpSocket, spawn, time};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
@@ -38,7 +38,9 @@ use crate::buffer_ext::SocketBufferExt;
 
 const PRIORITY_QUEUE_BYTES_CAPACITY: usize = 100 * 1024 * 1024;
 
+#[cfg(target_os = "linux")]
 const DEFAULT_RINGBUF_COUNT: u32 = 2048;
+#[cfg(target_os = "linux")]
 const DEFAULT_RINGBUF_SIZE: u32 = ETHERNET_SEGMENT_SIZE as u32;
 
 #[derive(Error, Debug)]
@@ -142,6 +144,7 @@ fn set_send_buffer_size(socket: &UdpSocket, requested_size: usize) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn set_mtu_discovery(socket: &UdpSocket) {
     const MTU_DISCOVER: libc::c_int = libc::IP_PMTUDISC_OMIT;
     let raw_fd = socket.as_raw_fd();
@@ -163,6 +166,9 @@ fn set_mtu_discovery(socket: &UdpSocket) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn set_mtu_discovery(_socket: &UdpSocket) {}
+
 pub(crate) fn spawn_tasks(
     socket_configs: Vec<(UdpSocketId, SocketAddr, mpsc::Sender<RecvUdpMsg>)>,
     udp_egress_rx: mpsc::Receiver<UdpMsg>,
@@ -181,16 +187,26 @@ pub(crate) fn spawn_tasks(
         let actual_addr = tx.local_addr().unwrap();
         bound_addrs.push((socket_id, actual_addr));
 
-        let group_id = socket_id as u16;
         if use_multishot {
-            let rx = tx.dup().expect("failed to dup socket");
-            spawn(rx_multishot_socket(rx, ingress_tx.clone(), group_id));
-            trace!(
-                ?socket_id,
-                ?socket_addr,
-                ?actual_addr,
-                "created multishot socket"
-            );
+            #[cfg(target_os = "linux")]
+            {
+                let group_id = socket_id as u16;
+                let rx = tx.dup().expect("failed to dup socket");
+                spawn(rx_multishot_socket(rx, ingress_tx.clone(), group_id));
+                trace!(
+                    ?socket_id,
+                    ?socket_addr,
+                    ?actual_addr,
+                    "created multishot socket"
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                warn!("multishot not supported on this platform, falling back to single socket");
+                let rx = tx.dup().expect("failed to dup socket");
+                spawn(rx_single_socket(rx, ingress_tx.clone()));
+                trace!(?socket_id, ?socket_addr, ?actual_addr, "created socket (multishot fallback)");
+            }
         } else {
             let rx = tx.dup().expect("failed to dup socket");
             spawn(rx_single_socket(rx, ingress_tx.clone()));
@@ -230,12 +246,14 @@ async fn rx_single_socket(socket: UdpSocket, udp_ingress_tx: mpsc::Sender<RecvUd
     }
 }
 
+#[cfg(target_os = "linux")]
 enum MultishotResult<R> {
     ReuseRing(R),
     RecreateRing,
     ChannelClosed,
 }
 
+#[cfg(target_os = "linux")]
 async fn run_multishot_stream(
     socket: &UdpSocket,
     udp_ingress_tx: &mpsc::Sender<RecvUdpMsg>,
@@ -282,6 +300,7 @@ async fn run_multishot_stream(
     }
 }
 
+#[cfg(target_os = "linux")]
 async fn rx_multishot_socket(
     socket: UdpSocket,
     udp_ingress_tx: mpsc::Sender<RecvUdpMsg>,
@@ -415,7 +434,14 @@ async fn tx(
                         if is_eafnosupport(err) {
                             debug!("send address family mismatch. message is dropped");
                         } else {
+                            #[cfg(target_os = "linux")]
                             error!(
+                                len = chunk.len(),
+                                ?err,
+                                "unexpected send error. message is dropped"
+                            );
+                            #[cfg(not(target_os = "linux"))]
+                            warn!(
                                 len = chunk.len(),
                                 ?err,
                                 "unexpected send error. message is dropped"

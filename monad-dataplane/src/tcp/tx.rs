@@ -397,6 +397,7 @@ async fn connect_and_send_messages(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn conn_cork(raw_fd: RawFd, cork_flag: bool) {
     let r = unsafe {
         let cork_flag: libc::c_int = if cork_flag { 1 } else { 0 };
@@ -417,6 +418,9 @@ fn conn_cork(raw_fd: RawFd, cork_flag: bool) {
         );
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn conn_cork(_raw_fd: RawFd, _cork_flag: bool) {}
 
 async fn send_message(
     conn_id: u64,

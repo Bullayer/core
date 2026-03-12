@@ -30,7 +30,7 @@ use addrlist::Addrlist;
 use bytes::Bytes;
 use futures::channel::oneshot;
 use monad_types::UdpPriority;
-use monoio::{spawn, time::Instant, IoUringDriver, RuntimeBuilder};
+use monoio::{spawn, time::Instant, FusionDriver, RuntimeBuilder};
 use tcp::{TcpConfig, TcpControl, TcpRateLimit};
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tracing::{debug, warn};
@@ -114,7 +114,7 @@ impl DataplaneBuilder {
                 connections_limit: 10000,
                 per_ip_connections_limit: 100,
             },
-            ban_duration: Duration::from_secs(5 * 60), // 5 minutes
+            ban_duration: Duration::from_secs(5 * 60),
             udp_sockets: Vec::new(),
             tcp_sockets: Vec::new(),
             udp_multishot: true,
@@ -221,7 +221,7 @@ impl DataplaneBuilder {
                 let tcp_control_map = tcp_control_map.clone();
                 let addrlist = addrlist.clone();
                 move || {
-                    RuntimeBuilder::<IoUringDriver>::new()
+                    RuntimeBuilder::<FusionDriver>::new()
                         .enable_timer()
                         .build()
                         .expect("Failed building the Runtime")

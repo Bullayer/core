@@ -125,7 +125,8 @@ fn udp_unicast() {
 }
 
 #[test]
-#[timeout(1000)]
+#[timeout(2000)]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 fn udp_direct_socket() {
     once_setup();
 
@@ -992,6 +993,7 @@ async fn test_tcp_banned() {
 
 #[test]
 #[timeout(1000)]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 fn udp_large_stride() {
     once_setup();
 

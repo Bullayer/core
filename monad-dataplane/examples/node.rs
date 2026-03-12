@@ -110,28 +110,28 @@ fn main() {
 struct Node {
     udp_socket: UdpSocketHandle,
     tcp_socket: TcpSocketHandle,
-    dataplane: Dataplane,
+    _dataplane: Dataplane,
     target: SocketAddr,
 }
 
 impl Node {
     pub fn new(addr: &SocketAddr, target_addr: &str) -> Self {
-        let mut dataplane = DataplaneBuilder::new(1_000)
+        let mut _dataplane = DataplaneBuilder::new(1_000)
             .with_udp_sockets([(UdpSocketId::Raptorcast, *addr)])
             .with_tcp_sockets([(TcpSocketId::Raptorcast, *addr)])
             .build();
-        let udp_socket = dataplane
+        let udp_socket = _dataplane
             .udp_sockets
             .take(UdpSocketId::Raptorcast)
             .expect("udp socket");
-        let tcp_socket = dataplane
+        let tcp_socket = _dataplane
             .tcp_sockets
             .take(TcpSocketId::Raptorcast)
             .expect("tcp socket");
         Self {
             udp_socket,
             tcp_socket,
-            dataplane,
+            _dataplane,
             target: target_addr.parse().unwrap(),
         }
     }
