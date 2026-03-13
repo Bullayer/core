@@ -56,7 +56,6 @@ const NUM_LOOKUP_PEERS: usize = 3;
 // TODO: this should be configurable
 const NUM_UPSTREAM_VALIDATORS: usize = 3;
 
-/// Metrics constants
 monad_executor::metric_consts! {
     pub GAUGE_PEER_DISC_SEND_PING {
         name: "monad.peer_disc.send_ping",

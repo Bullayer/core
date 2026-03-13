@@ -259,6 +259,4 @@ pub struct Cli {
     #[arg(long)]
     pub exec_event_path: Option<PathBuf>,
 
-    #[arg(long)]
-    pub manytrace_socket: Option<String>,
 }

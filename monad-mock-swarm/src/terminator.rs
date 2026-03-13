@@ -195,7 +195,7 @@ where
                 next_seq_num += SeqNum(1);
             }
 
-            for i in 1..=(*expected_len) {}
+            for _i in 1..=(*expected_len) {}
         }
 
         true

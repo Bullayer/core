@@ -23,6 +23,7 @@ struct BlockRewardConfig {
 }
 
 impl BlockRewardConfig {
+    #[allow(dead_code)]
     pub const fn unused() -> Self {
         Self {
             block_reward_activation: Epoch::MAX,

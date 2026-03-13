@@ -21,7 +21,6 @@ use std::{
     time::Duration,
 };
 
-use agent::AgentBuilder;
 use clap::{error::ErrorKind, FromArgMatches};
 use monad_bls::BlsKeyPair;
 use monad_chain_config::MonadChainConfig;
@@ -33,7 +32,6 @@ use monad_secp::KeyPair;
 use monad_types::Round;
 use reqwest::{blocking::Client, Url};
 use tracing::{info, warn};
-use tracing_manytrace::{ManytraceLayer, TracingExtension};
 use tracing_subscriber::{
     fmt::{format::FmtSpan, Layer as FmtLayer},
     layer::SubscriberExt,
@@ -70,9 +68,13 @@ pub struct NodeState {
     pub otel_endpoint_interval: Option<(String, Duration)>,
     pub pprof: String,
     pub reload_handle: Box<dyn TracingReload>,
-    // should be kept as long as node is alive, tracing listener is stopped when handle is dropped
-    #[allow(unused)]
-    manytrace_agent: Option<agent::Agent>,
+
+    pub rpc_addr: String,
+    pub rpc_port: u16,
+    pub rpc_worker_threads: usize,
+    pub rpc_ws_enabled: bool,
+    pub rpc_ws_port: u16,
+    pub exec_event_path: Option<PathBuf>,
 }
 
 impl NodeState {
@@ -95,11 +97,16 @@ impl NodeState {
             otel_endpoint,
             record_metrics_interval_seconds,
             pprof,
-            manytrace_socket,
             persisted_peers_path,
+            rpc_addr,
+            rpc_port,
+            rpc_worker_threads,
+            rpc_ws_enabled,
+            rpc_ws_port,
+            exec_event_path,
         } = Cli::from_arg_matches_mut(&mut cmd.get_matches_mut())?;
 
-        let (reload_handle, agent) = NodeState::setup_tracing(manytrace_socket)?;
+        let reload_handle = NodeState::setup_tracing()?;
 
         let keystore_password = keystore_password.as_deref().unwrap_or("");
 
@@ -201,60 +208,35 @@ impl NodeState {
             otel_endpoint_interval,
             pprof,
             reload_handle,
-            manytrace_agent: agent,
+
+            rpc_addr,
+            rpc_port,
+            rpc_worker_threads,
+            rpc_ws_enabled,
+            rpc_ws_port,
+            exec_event_path,
+
             persisted_peers_path,
         })
     }
 
-    fn setup_tracing(
-        manytrace_socket: Option<String>,
-    ) -> Result<(Box<dyn TracingReload>, Option<agent::Agent>), NodeSetupError> {
-        if let Some(socket_path) = manytrace_socket {
-            let extension = std::sync::Arc::new(TracingExtension::new());
-            let agent = AgentBuilder::new(socket_path)
-                .register_tracing(Box::new((*extension).clone()))
-                .build()
-                .map_err(|e| NodeSetupError::Custom {
-                    kind: clap::error::ErrorKind::Io,
-                    msg: format!("failed to build manytrace agent: {}", e),
-                })?;
-            let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(
-                tracing_subscriber::EnvFilter::from_default_env(),
-            );
-            let subscriber = tracing_subscriber::Registry::default()
-                .with(ManytraceLayer::new(extension))
-                .with(
-                    FmtLayer::default()
-                        .json()
-                        .with_span_events(FmtSpan::NONE)
-                        .with_current_span(false)
-                        .with_span_list(false)
-                        .with_writer(std::io::stdout)
-                        .with_ansi(false)
-                        .with_filter(filter),
-                );
+    fn setup_tracing() -> Result<Box<dyn TracingReload>, NodeSetupError> {
+        let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(
+            tracing_subscriber::EnvFilter::from_default_env(),
+        );
 
-            tracing::subscriber::set_global_default(subscriber)?;
-            info!("manytrace tracing enabled");
-            Ok((Box::new(reload_handle), Some(agent)))
-        } else {
-            let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(
-                tracing_subscriber::EnvFilter::from_default_env(),
-            );
+        let subscriber = tracing_subscriber::Registry::default().with(filter).with(
+            FmtLayer::default()
+                .json()
+                .with_span_events(FmtSpan::NONE)
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_writer(std::io::stdout)
+                .with_ansi(false),
+        );
 
-            let subscriber = tracing_subscriber::Registry::default().with(filter).with(
-                FmtLayer::default()
-                    .json()
-                    .with_span_events(FmtSpan::NONE)
-                    .with_current_span(false)
-                    .with_span_list(false)
-                    .with_writer(std::io::stdout)
-                    .with_ansi(false),
-            );
-
-            tracing::subscriber::set_global_default(subscriber)?;
-            Ok((Box::new(reload_handle), None))
-        }
+        tracing::subscriber::set_global_default(subscriber)?;
+        Ok(Box::new(reload_handle))
     }
 }
 

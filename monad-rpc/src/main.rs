@@ -13,15 +13,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use agent::AgentBuilder;
 use clap::Parser;
 use monad_node_config::MonadNodeConfig;
 use monad_pprof::start_pprof_server;
 use monad_rpc::{cli::Cli, txpool::EthTxPoolBridge, MONAD_RPC_VERSION};
 use tracing::{debug, error, info, warn};
-use tracing_manytrace::{ManytraceLayer, TracingExtension};
 use tracing_subscriber::{
     fmt::{format::FmtSpan, Layer as FmtLayer},
     layer::SubscriberExt,
@@ -44,44 +42,19 @@ async fn main() -> std::io::Result<()> {
     let node_config: MonadNodeConfig = toml::from_str(&std::fs::read_to_string(&args.node_config)?)
         .expect("node toml parse error");
 
-    let _agent = if let Some(socket_path) = &args.manytrace_socket {
-        let extension = Arc::new(TracingExtension::new());
-        let agent = AgentBuilder::new(socket_path.clone())
-            .register_tracing(Box::new((*extension).clone()))
-            .build()
-            .expect("failed to build manytrace agent");
-
-        let s = Registry::default()
-            .with(ManytraceLayer::new(extension))
-            .with(
-                FmtLayer::default()
-                    .json()
-                    .with_span_events(FmtSpan::NONE)
-                    .with_current_span(false)
-                    .with_span_list(false)
-                    .with_writer(std::io::stdout)
-                    .with_ansi(false)
-                    .with_filter(EnvFilter::from_default_env()),
-            )
-            .with(monad_tracing_timing::TimingsLayer::new());
-        tracing::subscriber::set_global_default(s).expect("failed to set logger");
-        Some(agent)
-    } else {
-        let s = Registry::default()
-            .with(
-                FmtLayer::default()
-                    .json()
-                    .with_span_events(FmtSpan::NONE)
-                    .with_current_span(false)
-                    .with_span_list(false)
-                    .with_writer(std::io::stdout)
-                    .with_ansi(false)
-                    .with_filter(EnvFilter::from_default_env()),
-            )
-            .with(monad_tracing_timing::TimingsLayer::new());
-        tracing::subscriber::set_global_default(s).expect("failed to set logger");
-        None
-    };
+    let s = Registry::default()
+        .with(
+            FmtLayer::default()
+                .json()
+                .with_span_events(FmtSpan::NONE)
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_writer(std::io::stdout)
+                .with_ansi(false)
+                .with_filter(EnvFilter::from_default_env()),
+        )
+        .with(monad_tracing_timing::TimingsLayer::new());
+    tracing::subscriber::set_global_default(s).expect("failed to set logger");
 
     if !args.pprof.is_empty() {
         let pprof_addr = args.pprof.clone();

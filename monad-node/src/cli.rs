@@ -93,10 +93,31 @@ pub struct Cli {
     )]
     pub pprof: String,
 
-    #[arg(long)]
-    pub manytrace_socket: Option<String>,
-
     /// Set the path for the file that will persist peer discovery records across restarts
     #[arg(long)]
     pub persisted_peers_path: PathBuf,
+
+    /// Set the address for the RPC server to bind to
+    #[arg(long, default_value_t = String::from("0.0.0.0"))]
+    pub rpc_addr: String,
+
+    /// Set the port number for the RPC server to listen
+    #[arg(long, default_value_t = 8080)]
+    pub rpc_port: u16,
+
+    /// Set the number of worker threads for the RPC HTTP server
+    #[arg(long, default_value_t = 2)]
+    pub rpc_worker_threads: usize,
+
+    /// Enable the RPC WebSocket server
+    #[arg(long, default_value_t = false)]
+    pub rpc_ws_enabled: bool,
+
+    /// Set the port number for the RPC WebSocket server
+    #[arg(long, default_value_t = 8081)]
+    pub rpc_ws_port: u16,
+
+    /// Set the socket path for the monad execution event server (required for RPC websockets)
+    #[arg(long)]
+    pub exec_event_path: Option<PathBuf>,
 }

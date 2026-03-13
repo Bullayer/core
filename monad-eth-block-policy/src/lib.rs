@@ -171,6 +171,7 @@ impl BlockTxnFeeStates {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct CommittedBlock {
     block_id: BlockId,

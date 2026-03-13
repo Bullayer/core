@@ -259,15 +259,57 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
                     0,
                 );
 
-            let (_txpool_bridge_client, _bridge_handle) = EthTxPoolChannelBridge::start(
+            let (txpool_bridge_client, _bridge_handle) = EthTxPoolChannelBridge::start(
                 channel_tx_sender,
                 state_view,
                 bridge_state,
                 eviction_queue,
             );
 
-            // TODO: Start RPC server in-process with _txpool_bridge_client
-            // tokio::spawn(monad_rpc::start_rpc_server(rpc_args, node_name, chain_id, Some(_txpool_bridge_client)));
+            let rpc_node_name = node_state.node_config.node_name.clone();
+            let rpc_chain_id = node_state.node_config.chain_id;
+
+            let node_config_str = node_state.node_config_path.display().to_string();
+            let triedb_str = statesync_triedb_path.display().to_string();
+            let rpc_port_str = node_state.rpc_port.to_string();
+            let ws_port_str = node_state.rpc_ws_port.to_string();
+            let worker_threads_str = node_state.rpc_worker_threads.to_string();
+            let exec_event_str = node_state.exec_event_path.as_ref().map(|p| p.display().to_string());
+            let otel_str = node_state.otel_endpoint_interval.as_ref().map(|(ep, _)| ep.clone());
+
+            let mut parse_args: Vec<String> = vec![
+                "monad-rpc".into(),
+                "--node-config".into(), node_config_str,
+                "--triedb-path".into(), triedb_str,
+                "--rpc-addr".into(), node_state.rpc_addr.clone(),
+                "--rpc-port".into(), rpc_port_str,
+                "--worker-threads".into(), worker_threads_str,
+                "--ws-port".into(), ws_port_str,
+            ];
+            if node_state.rpc_ws_enabled {
+                parse_args.push("--ws-enabled".into());
+            }
+            if let Some(ref exec_path) = exec_event_str {
+                parse_args.extend(["--exec-event-path".into(), exec_path.clone()]);
+            }
+            if let Some(ref otel_ep) = otel_str {
+                parse_args.extend(["--otel-endpoint".into(), otel_ep.clone()]);
+            }
+
+            let mut rpc_cli = monad_rpc::cli::Cli::try_parse_from(&parse_args)
+                .expect("failed to construct RPC server configuration");
+            rpc_cli.ipc_path = None;
+
+            tokio::spawn(async move {
+                if let Err(e) = monad_rpc::start_rpc_server(
+                    rpc_cli,
+                    rpc_node_name,
+                    rpc_chain_id,
+                    Some(txpool_bridge_client),
+                ).await {
+                    error!("RPC server failed: {}", e);
+                }
+            });
 
             txpool_client
         },

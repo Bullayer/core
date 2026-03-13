@@ -77,8 +77,8 @@ where
 
     fn read_valset_at_block(
         &self,
-        block_num: SeqNum,
-        requested_epoch: monad_types::Epoch,
+        _block_num: SeqNum,
+        _requested_epoch: monad_types::Epoch,
     ) -> Vec<(
         <SCT as SignatureCollection>::NodeIdPubKey,
         SignatureCollectionPubKeyType<SCT>,

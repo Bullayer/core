@@ -230,7 +230,6 @@ impl<'a> ProposalSequencer<'a> {
                 &mut account_balances,
                 &validator,
                 &mut proposal,
-                address,
                 tx.tx,
             ) {
                 if let Some(next_tx) = queued.pop_front() {
@@ -271,7 +270,6 @@ impl<'a> ProposalSequencer<'a> {
         account_balances: &mut BTreeMap<&Address, AccountBalanceState>,
         validator: &EthBlockPolicyBlockValidator<CRT>,
         proposal: &mut Proposal,
-        address: &Address,
         tx: &PoolTx,
     ) -> bool {
         if proposal

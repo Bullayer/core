@@ -729,9 +729,9 @@ where
 
                 match commit {
                     OptimisticPolicyCommit::Proposed { block, .. } => {
-                        let block_id = block.get_id();
-                        let round = block.get_block_round();
-                        let seq_num = block.get_seq_num();
+                        let _block_id = block.get_id();
+                        let _round = block.get_block_round();
+                        let _seq_num = block.get_seq_num();
                     }
                     OptimisticPolicyCommit::Voted(block) => {
                         let _ = block.get_id();

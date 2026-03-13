@@ -43,7 +43,6 @@ actix-http = { workspace = true }
 actix-rt = { workspace = true }
 actix-web = { workspace = true }
 actix-ws = { workspace = true }
-agent = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-primitives = { workspace = true }
@@ -74,7 +73,6 @@ tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "fs"
 toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-actix-web = { workspace = true }
-tracing-manytrace = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies.tikv-jemallocator]
