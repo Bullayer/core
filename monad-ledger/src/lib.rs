@@ -36,11 +36,16 @@ use monad_crypto::certificate_signature::{
     CertificateSignaturePubKey, CertificateSignatureRecoverable,
 };
 use monad_eth_types::EthExecutionProtocol;
+use monad_execution_engine::command::ExecutionCommand;
 use monad_executor::{Executor, ExecutorMetrics, ExecutorMetricsChain};
 use monad_executor_glue::{BlockSyncEvent, LedgerCommand, MonadEvent};
 use monad_types::{BlockId, Round, SeqNum, GENESIS_ROUND};
 use monad_validator::signature_collection::SignatureCollection;
 use tracing::{info, trace, warn};
+
+fn block_id_to_b256(id: &BlockId) -> alloy_primitives::B256 {
+    alloy_primitives::B256::from(id.0 .0)
+}
 
 /// A ledger for committed Ethereum blocks
 /// Blocks are RLP encoded and written to their own individual file, named by the block
@@ -65,6 +70,8 @@ where
     fetches: tokio::sync::mpsc::UnboundedReceiver<
         BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>,
     >,
+
+    execution_tx: Option<tokio::sync::mpsc::Sender<ExecutionCommand>>,
 
     phantom: PhantomData<ST>,
 }
@@ -114,8 +121,15 @@ where
             fetches_tx,
             fetches,
 
+            execution_tx: None,
+
             phantom: PhantomData,
         }
+    }
+
+    /// Set the execution engine command sender for in-process execution.
+    pub fn set_execution_sender(&mut self, tx: tokio::sync::mpsc::Sender<ExecutionCommand>) {
+        self.execution_tx = Some(tx);
     }
 
     pub fn last_commit(&self) -> Option<SeqNum> {
@@ -269,7 +283,6 @@ where
                     block,
                     is_canonical,
                 }) => {
-                    // this can panic because failure to persist a block is fatal error
                     self.write_bft_block(&block);
 
                     if is_canonical {
@@ -278,13 +291,46 @@ where
                             .unwrap();
                     }
 
+                    // Send Propose command to ExecutionEngine if configured
+                    if let Some(ref tx) = self.execution_tx {
+                        let _ = tx.try_send(ExecutionCommand::Propose {
+                            block_id: block_id_to_b256(&block.get_id()),
+                            header: monad_execution_engine::types::ConsensusHeader {
+                                seqno: block.get_seq_num().0,
+                                parent_id: block_id_to_b256(&block.header().get_parent_id()),
+                                block_body_id: alloy_primitives::B256::ZERO,
+                                block_round: block.get_block_round().0,
+                                epoch: 0,
+                                timestamp_ns: 0,
+                                author: [0u8; 33],
+                                execution_inputs: monad_execution_engine::types::BlockHeader::default(),
+                                delayed_execution_results: Vec::new(),
+                                base_fee_trend: 0,
+                                base_fee_moment: 0,
+                            },
+                            body: monad_execution_engine::types::ConsensusBody {
+                                transactions: Vec::new(),
+                                ommers: Vec::new(),
+                                withdrawals: Vec::new(),
+                            },
+                        });
+                    }
+
                     self.update_cache(block);
                 }
                 LedgerCommand::LedgerCommit(OptimisticCommit::Voted(block)) => {
                     let block_id = block.get_id();
+                    let block_seq = block.get_seq_num().0;
                     self.update_cache(block);
 
                     self.bft_block_persist.update_voted_head(&block_id).unwrap();
+
+                    if let Some(ref tx) = self.execution_tx {
+                        let _ = tx.try_send(ExecutionCommand::Vote {
+                            block_number: block_seq,
+                            block_id: block_id_to_b256(&block_id),
+                        });
+                    }
                 }
                 LedgerCommand::LedgerCommit(OptimisticCommit::Finalized(block)) => {
                     self.metrics[GAUGE_EXECUTION_LEDGER_NUM_COMMITS] += 1;
@@ -301,6 +347,14 @@ where
                     self.bft_block_persist
                         .update_finalized_head(&block_id)
                         .unwrap();
+
+                    if let Some(ref tx) = self.execution_tx {
+                        let _ = tx.try_send(ExecutionCommand::Finalize {
+                            block_number: block_num,
+                            block_id: block_id_to_b256(&block_id),
+                            verified_blocks: Vec::new(),
+                        });
+                    }
                 }
                 LedgerCommand::LedgerFetchHeaders(block_range) => {
                     // TODO cap max concurrent LedgerFetch? DOS vector

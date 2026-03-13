@@ -20,6 +20,7 @@ monad-eth-block-policy = { workspace = true }
 monad-eth-block-validator = { workspace = true }
 monad-eth-txpool-executor = { workspace = true }
 monad-rpc = { workspace = true }
+monad-execution-engine = { workspace = true }
 monad-executor = { workspace = true }
 monad-executor-glue = { workspace = true }
 monad-keystore = { workspace = true }
@@ -42,6 +43,7 @@ monad-version = { workspace = true }
 monad-wal = { workspace = true }
 monad-wireauth = { workspace = true }
 
+alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

@@ -25,7 +25,7 @@ use std::{
 
 use alloy_rlp::{Decodable, Encodable};
 use chrono::Utc;
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser};
 use futures_util::{FutureExt, StreamExt};
 use monad_chain_config::ChainConfig;
 use monad_consensus_state::ConsensusConfig;
@@ -39,6 +39,11 @@ use monad_eth_block_policy::EthBlockPolicy;
 use monad_eth_block_validator::EthBlockValidator;
 use monad_eth_txpool_executor::EthTxPoolExecutor;
 use monad_rpc::txpool::channel_bridge::EthTxPoolChannelBridge;
+use monad_execution_engine::engine::ExecutionEngine;
+use monad_execution_engine::mock::{
+    db::InMemoryExecutionDb, executor::MockBlockExecutor, recovery::MockSignatureRecovery,
+};
+use monad_execution_engine::types::ChainConfig as ExecChainConfig;
 use monad_executor::{Executor, ExecutorMetricsChain};
 use monad_executor_glue::{LogFriendlyMonadEvent, Message, MonadEvent};
 use monad_ledger::MonadBlockFileLedger;
@@ -224,6 +229,16 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         }
     });
 
+    let (execution_engine, execution_event_rx) = ExecutionEngine::start(
+        ExecChainConfig {
+            chain_id: alloy_primitives::U256::from(node_state.node_config.chain_id),
+        },
+        Box::new(InMemoryExecutionDb::new()),
+        Box::new(MockBlockExecutor::new()),
+        Box::new(MockSignatureRecovery::new()),
+    );
+    let execution_cmd_tx = execution_engine.command_sender();
+
     let mut executor = ParentExecutor {
         metrics: Default::default(),
         router,
@@ -306,6 +321,7 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
                     rpc_node_name,
                     rpc_chain_id,
                     Some(txpool_bridge_client),
+                    Some(execution_event_rx),
                 ).await {
                     error!("RPC server failed: {}", e);
                 }
@@ -338,6 +354,8 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         ),
         config_loader: ConfigLoader::new(node_state.node_config_path),
     };
+
+    executor.ledger.set_execution_sender(execution_cmd_tx);
 
     let logger_config: WALoggerConfig<LogFriendlyMonadEvent<_, _, _>> = WALoggerConfig::new(
         node_state.wal_path.clone(), // output wal path

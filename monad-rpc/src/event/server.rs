@@ -13,14 +13,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use alloy_primitives::B256;
 use itertools::Itertools;
-use monad_event_ring::{DecodedEventRing, EventNextResult};
-use monad_exec_events::{
-    BlockBuilderError, BlockCommitState, CommitStateBlockBuilder, CommitStateBlockUpdate,
-    ExecEventRing, ExecutedBlock, ExecutedBlockBuilder,
-};
+use monad_execution_engine::events::{BlockCommitState, ExecutionEvent};
 use monad_types::BlockId;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -28,130 +25,401 @@ use tracing::{debug, warn};
 use super::{EventServerClient, EventServerEvent, BROADCAST_CHANNEL_SIZE};
 use crate::types::{eth_json::MonadNotification, serialize::JsonSerialized};
 
-pub struct EventServer<R>
-where
-    R: DecodedEventRing,
-{
-    event_ring: R,
-    block_builder: CommitStateBlockBuilder,
-    broadcast_tx: broadcast::Sender<EventServerEvent>,
+/// Cached block data from a BlockProposed event, reused across state transitions.
+struct ProposedBlock {
+    block_id: B256,
+    header: alloy_rpc_types::Header,
+    transactions: Vec<alloy_rpc_types::Transaction>,
+    receipts: Vec<alloy_rpc_types::TransactionReceipt>,
 }
 
-impl EventServer<ExecEventRing> {
-    pub fn start(event_ring: ExecEventRing) -> EventServerClient {
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel(BROADCAST_CHANNEL_SIZE);
+pub struct EventServer;
 
-        let this = Self {
-            event_ring,
-            block_builder: CommitStateBlockBuilder::new(ExecutedBlockBuilder::new(false)),
-            broadcast_tx: broadcast_tx.clone(),
-        };
+impl EventServer {
+    pub fn start(
+        mut event_rx: broadcast::Receiver<ExecutionEvent>,
+    ) -> EventServerClient {
+        let (broadcast_tx, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
 
-        let handle = tokio::spawn(this.run());
+        let tx = broadcast_tx.clone();
+        let handle = tokio::spawn(async move {
+            const MAX_PROPOSED_BLOCKS: usize = 64;
+            let mut proposed_blocks: HashMap<B256, Arc<ProposedBlock>> = HashMap::new();
+
+            loop {
+                let event = match event_rx.recv().await {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "event server lagged behind");
+                        broadcast_event(&tx, EventServerEvent::Gap);
+                        proposed_blocks.clear();
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("execution event channel closed, event server exiting");
+                        break;
+                    }
+                };
+
+                match event {
+                    ExecutionEvent::BlockProposed {
+                        block_id,
+                        header,
+                        transactions,
+                        senders,
+                        receipts,
+                        eth_block_hash,
+                        ..
+                    } => {
+                        if proposed_blocks.len() >= MAX_PROPOSED_BLOCKS {
+                            warn!(
+                                count = proposed_blocks.len(),
+                                "proposed_blocks cache full, evicting oldest entries"
+                            );
+                            proposed_blocks.clear();
+                        }
+
+                        let proposed = build_proposed_block(
+                            block_id,
+                            &header,
+                            &transactions,
+                            &senders,
+                            &receipts,
+                            eth_block_hash,
+                        );
+                        let proposed = Arc::new(proposed);
+                        broadcast_block_updates(
+                            &tx,
+                            &proposed,
+                            BlockCommitState::Proposed,
+                        );
+                        proposed_blocks.insert(block_id, proposed);
+                    }
+
+                    ExecutionEvent::BlockVoted {
+                        block_id,
+                        ..
+                    } => {
+                        if let Some(proposed) = proposed_blocks.get(&block_id) {
+                            broadcast_block_updates(
+                                &tx,
+                                proposed,
+                                BlockCommitState::Voted,
+                            );
+                        } else {
+                            warn!(%block_id, "BlockVoted for unknown block");
+                        }
+                    }
+
+                    ExecutionEvent::BlockFinalized {
+                        block_id,
+                        ..
+                    } => {
+                        if let Some(proposed) = proposed_blocks.remove(&block_id) {
+                            broadcast_block_updates(
+                                &tx,
+                                &proposed,
+                                BlockCommitState::Finalized,
+                            );
+                        } else {
+                            warn!(%block_id, "BlockFinalized for unknown block");
+                        }
+                    }
+
+                    ExecutionEvent::BlockVerified { block_number } => {
+                        debug!(block_number, "BlockVerified event (no broadcast)");
+                    }
+
+                    ExecutionEvent::Gap => {
+                        proposed_blocks.clear();
+                        broadcast_event(&tx, EventServerEvent::Gap);
+                    }
+                }
+            }
+        });
 
         EventServerClient::new(broadcast_tx, handle)
     }
+}
 
-    async fn run(self) {
-        let Self {
-            event_ring,
-            mut block_builder,
-            broadcast_tx,
-        } = self;
+fn build_proposed_block(
+    block_id: B256,
+    header: &monad_execution_engine::types::BlockHeader,
+    transactions: &[monad_execution_engine::types::Transaction],
+    senders: &[alloy_primitives::Address],
+    receipts: &[monad_execution_engine::types::Receipt],
+    eth_block_hash: B256,
+) -> ProposedBlock {
+    let alloy_header = convert_header(header, eth_block_hash);
+    let base_fee = alloy_header.inner.base_fee_per_gas;
 
-        let mut event_reader = event_ring.create_reader();
+    let alloy_txs = convert_transactions(
+        transactions,
+        senders,
+        eth_block_hash,
+        header.number,
+        base_fee,
+    );
 
-        loop {
-            let event_descriptor = match event_reader.next_descriptor() {
-                EventNextResult::Gap => {
-                    warn!("EventServer event_reader gapped");
+    let alloy_receipts = convert_receipts(
+        transactions,
+        senders,
+        receipts,
+        eth_block_hash,
+        header.number,
+        header.timestamp,
+        base_fee,
+    );
 
-                    broadcast_event(&broadcast_tx, EventServerEvent::Gap);
-                    event_reader.reset();
-                    block_builder.reset();
-                    continue;
-                }
-                EventNextResult::NotReady => {
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    continue;
-                }
-                EventNextResult::Ready(event_descriptor) => event_descriptor,
-            };
+    ProposedBlock {
+        block_id,
+        header: alloy_header,
+        transactions: alloy_txs,
+        receipts: alloy_receipts,
+    }
+}
 
-            let Some(result) = block_builder.process_event_descriptor(&event_descriptor) else {
-                continue;
-            };
+fn convert_header(
+    header: &monad_execution_engine::types::BlockHeader,
+    eth_block_hash: B256,
+) -> alloy_rpc_types::Header {
+    let consensus_header = alloy_consensus::Header {
+        parent_hash: header.parent_hash,
+        ommers_hash: header.ommers_hash,
+        beneficiary: header.beneficiary,
+        state_root: header.state_root,
+        transactions_root: header.transactions_root,
+        receipts_root: header.receipts_root,
+        logs_bloom: alloy_primitives::Bloom::from(header.logs_bloom),
+        difficulty: alloy_primitives::U256::from(header.difficulty),
+        number: header.number,
+        gas_limit: header.gas_limit,
+        gas_used: header.gas_used,
+        timestamp: header.timestamp,
+        extra_data: alloy_primitives::Bytes::copy_from_slice(&header.extra_data),
+        mix_hash: header.mix_hash,
+        nonce: alloy_primitives::B64::from(header.nonce),
+        base_fee_per_gas: header.base_fee_per_gas,
+        withdrawals_root: header.withdrawals_root,
+        blob_gas_used: header.blob_gas_used.or(Some(0)),
+        excess_blob_gas: header.excess_blob_gas.or(Some(0)),
+        parent_beacon_block_root: header
+            .parent_beacon_block_root
+            .or(Some(alloy_primitives::B256::ZERO)),
+        requests_hash: header.requests_hash.or(Some(alloy_primitives::B256::ZERO)),
+    };
 
-            match result {
-                Err(BlockBuilderError::Rejected) => {
-                    unimplemented!();
-                }
-                Err(BlockBuilderError::PayloadExpired) => {
-                    warn!("EventServer consensus state tracker gapped through payload expired");
+    let size = consensus_header.size();
 
-                    broadcast_event(&broadcast_tx, EventServerEvent::Gap);
-                    event_reader.reset();
-                    block_builder.reset();
-                    continue;
-                }
-                Err(BlockBuilderError::ImplicitDrop {
-                    block,
-                    reassembly_error,
-                }) => {
-                    unreachable!("Implicit drop: {reassembly_error:#?}\n{block:#?}");
-                }
-                Ok(CommitStateBlockUpdate {
-                    block,
-                    state,
-                    abandoned,
-                }) => handle_update(&broadcast_tx, block, state, abandoned),
+    alloy_rpc_types::Header {
+        hash: eth_block_hash,
+        inner: consensus_header,
+        total_difficulty: Some(alloy_primitives::U256::ZERO),
+        size: Some(alloy_primitives::U256::from(size)),
+    }
+}
+
+fn convert_transactions(
+    transactions: &[monad_execution_engine::types::Transaction],
+    senders: &[alloy_primitives::Address],
+    block_hash: B256,
+    block_number: u64,
+    base_fee: Option<u64>,
+) -> Vec<alloy_rpc_types::Transaction> {
+    transactions
+        .iter()
+        .enumerate()
+        .map(|(tx_idx, tx)| {
+            let sender = senders.get(tx_idx).copied().unwrap_or_default();
+            let tx_envelope = decode_tx_envelope(&tx.data, tx.hash);
+            let effective_gas_price =
+                alloy_consensus::Transaction::effective_gas_price(&tx_envelope, base_fee);
+
+            alloy_rpc_types::Transaction {
+                inner: alloy_consensus::transaction::Recovered::new_unchecked(
+                    tx_envelope, sender,
+                ),
+                block_hash: Some(block_hash),
+                block_number: Some(block_number),
+                transaction_index: Some(tx_idx as u64),
+                effective_gas_price: Some(effective_gas_price),
             }
-        }
+        })
+        .collect()
+}
+
+fn decode_tx_envelope(data: &[u8], tx_hash: B256) -> alloy_consensus::TxEnvelope {
+    use alloy_rlp::Decodable;
+
+    if data.is_empty() {
+        return build_placeholder_tx_envelope(tx_hash);
+    }
+
+    match alloy_consensus::TxEnvelope::decode(&mut &data[..]) {
+        Ok(envelope) => envelope,
+        Err(_) => build_placeholder_tx_envelope(tx_hash),
     }
 }
 
-fn handle_update(
-    broadcast_tx: &broadcast::Sender<EventServerEvent>,
-    block: Arc<ExecutedBlock>,
-    commit_state: BlockCommitState,
-    abandoned: Vec<Arc<ExecutedBlock>>,
-) {
-    for abandoned in abandoned {
-        debug!(
-            "abandoned [round {}, seqnum {}]",
-            abandoned.start.round, abandoned.start.block_tag.block_number
-        );
-    }
+fn build_placeholder_tx_envelope(tx_hash: B256) -> alloy_consensus::TxEnvelope {
+    let tx = alloy_consensus::TxLegacy {
+        chain_id: None,
+        nonce: 0,
+        gas_price: 0,
+        gas_limit: 0,
+        to: alloy_primitives::TxKind::Create,
+        value: alloy_primitives::U256::ZERO,
+        input: alloy_primitives::Bytes::new(),
+    };
 
-    broadcast_block_updates(broadcast_tx, block, commit_state);
+    alloy_consensus::TxEnvelope::Legacy(alloy_consensus::Signed::new_unchecked(
+        tx,
+        alloy_primitives::Signature::new(
+            alloy_primitives::U256::ZERO,
+            alloy_primitives::U256::ZERO,
+            false,
+        ),
+        tx_hash,
+    ))
 }
 
-fn broadcast_event(broadcast_tx: &broadcast::Sender<EventServerEvent>, event: EventServerEvent) {
-    if broadcast_tx.send(event).is_err() {
-        // TODO: The send method only produces an error
-        // warn!("EventServer did not send event");
-    }
+fn convert_receipts(
+    transactions: &[monad_execution_engine::types::Transaction],
+    senders: &[alloy_primitives::Address],
+    receipts: &[monad_execution_engine::types::Receipt],
+    block_hash: B256,
+    block_number: u64,
+    block_timestamp: u64,
+    base_fee: Option<u64>,
+) -> Vec<alloy_rpc_types::TransactionReceipt> {
+    let mut log_index = 0u64;
+
+    receipts
+        .iter()
+        .enumerate()
+        .map(|(tx_idx, receipt)| {
+            let tx = transactions.get(tx_idx);
+            let tx_hash = tx.map(|t| t.hash).unwrap_or_default();
+            let sender = senders.get(tx_idx).copied().unwrap_or_default();
+            let tx_data = tx.map(|t| &t.data[..]).unwrap_or(&[]);
+
+            let logs: Vec<alloy_rpc_types::Log> = receipt
+                .logs
+                .iter()
+                .map(|log| {
+                    let alloy_log = alloy_rpc_types::Log {
+                        inner: alloy_primitives::Log {
+                            address: log.address,
+                            data: alloy_primitives::LogData::new_unchecked(
+                                log.topics.clone(),
+                                alloy_primitives::Bytes::copy_from_slice(&log.data),
+                            ),
+                        },
+                        block_hash: Some(block_hash),
+                        block_number: Some(block_number),
+                        block_timestamp: Some(block_timestamp),
+                        transaction_hash: Some(tx_hash),
+                        transaction_index: Some(tx_idx as u64),
+                        log_index: Some(log_index),
+                        removed: false,
+                    };
+                    log_index += 1;
+                    alloy_log
+                })
+                .collect();
+
+            let logs_bloom = alloy_primitives::logs_bloom(logs.iter().map(|l| &l.inner));
+
+            let receipt_with_bloom = alloy_consensus::ReceiptWithBloom {
+                receipt: alloy_consensus::Receipt {
+                    status: alloy_consensus::Eip658Value::Eip658(receipt.status),
+                    cumulative_gas_used: receipt.cumulative_gas_used,
+                    logs,
+                },
+                logs_bloom,
+            };
+
+            let tx_envelope = decode_tx_envelope(tx_data, tx_hash);
+
+            let receipt_envelope = match &tx_envelope {
+                alloy_consensus::TxEnvelope::Eip2930(_) => {
+                    alloy_consensus::ReceiptEnvelope::Eip2930(receipt_with_bloom)
+                }
+                alloy_consensus::TxEnvelope::Eip1559(_) => {
+                    alloy_consensus::ReceiptEnvelope::Eip1559(receipt_with_bloom)
+                }
+                alloy_consensus::TxEnvelope::Eip4844(_) => {
+                    alloy_consensus::ReceiptEnvelope::Eip4844(receipt_with_bloom)
+                }
+                alloy_consensus::TxEnvelope::Eip7702(_) => {
+                    alloy_consensus::ReceiptEnvelope::Eip7702(receipt_with_bloom)
+                }
+                _ => alloy_consensus::ReceiptEnvelope::Legacy(receipt_with_bloom),
+            };
+
+            let gas_used = if tx_idx > 0 {
+                receipt
+                    .cumulative_gas_used
+                    .saturating_sub(
+                        receipts
+                            .get(tx_idx - 1)
+                            .map(|r| r.cumulative_gas_used)
+                            .unwrap_or(0),
+                    )
+            } else {
+                receipt.cumulative_gas_used
+            };
+
+            let effective_gas_price =
+                alloy_consensus::Transaction::effective_gas_price(&tx_envelope, base_fee);
+
+            let to = alloy_consensus::Transaction::to(&tx_envelope);
+            let (to, contract_address) = match to {
+                Some(addr) => (Some(addr), None),
+                None => {
+                    let nonce = alloy_consensus::Transaction::nonce(&tx_envelope);
+                    (None, Some(sender.create(nonce)))
+                }
+            };
+
+            alloy_rpc_types::TransactionReceipt {
+                inner: receipt_envelope,
+                transaction_hash: tx_hash,
+                transaction_index: Some(tx_idx as u64),
+                block_hash: Some(block_hash),
+                block_number: Some(block_number),
+                gas_used,
+                effective_gas_price,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: sender,
+                to,
+                contract_address,
+            }
+        })
+        .collect()
 }
 
 fn broadcast_block_updates(
     broadcast_tx: &broadcast::Sender<EventServerEvent>,
-    block: Arc<ExecutedBlock>,
+    block: &ProposedBlock,
     commit_state: BlockCommitState,
 ) {
-    let block_id = BlockId(monad_types::Hash(block.start.block_tag.id.bytes));
+    let block_id = BlockId(monad_types::Hash(block.block_id.0));
 
     let serialized_monad_header = JsonSerialized::new_shared_with_map(
         MonadNotification {
             block_id,
             commit_state,
-            data: block.to_alloy_rpc_header(),
+            data: block.header.clone(),
         },
         |notification| notification.map(JsonSerialized::new_shared),
     );
 
     let transactions = block
-        .iter_alloy_rpc_txs()
-        .zip_eq(block.iter_alloy_rpc_tx_receipts())
+        .transactions
+        .iter()
+        .zip_eq(block.receipts.iter())
         .map(|(tx, tx_receipt)| {
             let logs = tx_receipt
                 .logs()
@@ -169,8 +437,8 @@ fn broadcast_block_updates(
                 .collect_vec();
 
             (
-                JsonSerialized::new_shared(tx),
-                JsonSerialized::new_shared(tx_receipt),
+                JsonSerialized::new_shared(tx.clone()),
+                JsonSerialized::new_shared(tx_receipt.clone()),
                 logs.into_boxed_slice(),
             )
         })
@@ -186,218 +454,6 @@ fn broadcast_block_updates(
     );
 }
 
-#[cfg(test)]
-mod test {
-    use std::time::Duration;
-
-    use monad_event_ring::SnapshotEventRing;
-    use monad_exec_events::ExecEventDecoder;
-    use serde::{de::DeserializeOwned, Serialize};
-
-    use super::*;
-    use crate::{
-        event::{EventServer, EventServerEvent},
-        types::eth_json::MonadNotification,
-    };
-
-    impl EventServer<SnapshotEventRing<ExecEventDecoder>> {
-        pub(crate) fn start_for_testing(
-            snapshot_event_ring: SnapshotEventRing<ExecEventDecoder>,
-        ) -> EventServerClient {
-            Self::start_for_testing_with_delay(snapshot_event_ring, Duration::from_millis(1))
-        }
-
-        pub(crate) fn start_for_testing_with_delay(
-            snapshot_event_ring: SnapshotEventRing<ExecEventDecoder>,
-            delay: Duration,
-        ) -> EventServerClient {
-            let (broadcast_tx, _) = tokio::sync::broadcast::channel(1024);
-
-            let this = Self {
-                event_ring: snapshot_event_ring,
-                block_builder: CommitStateBlockBuilder::new(ExecutedBlockBuilder::new(false)),
-                broadcast_tx: broadcast_tx.clone(),
-            };
-
-            let handle = tokio::spawn(this.run_for_testing(delay));
-
-            EventServerClient::new(broadcast_tx, handle)
-        }
-
-        async fn run_for_testing(self, delay: Duration) {
-            tokio::time::sleep(delay).await;
-
-            let Self {
-                event_ring,
-                mut block_builder,
-                broadcast_tx,
-            } = self;
-
-            let mut event_reader = event_ring.create_reader();
-
-            loop {
-                let event_descriptor = match event_reader.next_descriptor() {
-                    EventNextResult::Ready(event_descriptor) => event_descriptor,
-                    EventNextResult::NotReady => break,
-                    EventNextResult::Gap => {
-                        unreachable!("SnapshotEventDescriptor cannot gap")
-                    }
-                };
-
-                let Some(result) = block_builder.process_event_descriptor(&event_descriptor) else {
-                    continue;
-                };
-
-                match result {
-                    Err(BlockBuilderError::Rejected) => {
-                        unimplemented!();
-                    }
-                    Err(BlockBuilderError::PayloadExpired) => {
-                        unreachable!("SnapshotEventDescriptor payload cannot expire")
-                    }
-                    Err(BlockBuilderError::ImplicitDrop {
-                        block,
-                        reassembly_error,
-                    }) => {
-                        unreachable!("Implicit drop: {reassembly_error:#?}\n{block:#?}");
-                    }
-                    Ok(CommitStateBlockUpdate {
-                        block,
-                        state,
-                        abandoned,
-                    }) => handle_update(&broadcast_tx, block, state, abandoned),
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn testing_server() {
-        let snapshot_event_ring = SnapshotEventRing::new_from_zstd_bytes(
-            include_bytes!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/snapshot.zst"
-            ),
-            "TEST",
-        )
-        .unwrap();
-
-        let event_server_client = EventServer::start_for_testing(snapshot_event_ring);
-
-        let mut subscription = event_server_client.subscribe().unwrap();
-
-        let event = tokio::time::timeout(Duration::from_millis(10), subscription.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        match event {
-            EventServerEvent::Gap => {
-                panic!("EventServer using snapshot should never produce a gap!")
-            }
-            EventServerEvent::Block { .. } => {}
-        }
-    }
-
-    #[tokio::test]
-    async fn json() {
-        let snapshot_event_ring = SnapshotEventRing::new_from_zstd_bytes(
-            include_bytes!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/snapshot.zst"
-            ),
-            "TEST",
-        )
-        .unwrap();
-
-        let event_server_client = EventServer::start_for_testing(snapshot_event_ring);
-
-        let mut subscription = event_server_client.subscribe().unwrap();
-
-        let event = tokio::time::timeout(Duration::from_millis(10), subscription.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        let (commit_state, monad_header, transactions) = match event {
-            EventServerEvent::Gap => {
-                panic!("EventServer using snapshot should never produce a gap!")
-            }
-            EventServerEvent::Block {
-                commit_state,
-                header,
-                transactions,
-            } => (commit_state, header, transactions),
-        };
-
-        assert_eq!(commit_state, BlockCommitState::Proposed);
-
-        assert_json::<_, MonadNotification<alloy_rpc_types::Header>>(
-            &[&monad_header],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.monad-header.json"
-            ),
-        );
-
-        assert_json::<_, alloy_rpc_types::Header>(
-            &[&monad_header.data],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.header.json"
-            ),
-        );
-
-        let (tx_first, tx_first_receipt, tx_first_monad_logs) = transactions.first().unwrap();
-
-        assert_json::<_, alloy_rpc_types::Transaction>(
-            &[&tx_first],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.tx.0.json"
-            ),
-        );
-
-        assert_json::<_, alloy_rpc_types::TransactionReceipt>(
-            &[&tx_first_receipt],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.tx-receipt.0.json"
-            ),
-        );
-
-        assert!(tx_first_monad_logs.is_empty());
-
-        let monad_log = transactions
-            .iter()
-            .flat_map(|(_, _, logs)| logs.iter())
-            .next()
-            .unwrap();
-
-        assert_json::<_, MonadNotification<alloy_rpc_types::Log>>(
-            &[&monad_log],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.monad-log.0.json"
-            ),
-        );
-
-        assert_json::<_, alloy_rpc_types::Log>(
-            &[&monad_log.data],
-            include_str!(
-                "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/0.log.0.json"
-            ),
-        );
-    }
-
-    fn assert_json<T, E>(values: &[T], json: &'static str)
-    where
-        T: Serialize,
-        E: DeserializeOwned,
-    {
-        for value in values {
-            let str = serde_json::to_string(value).unwrap();
-
-            assert!(!str.contains("serde"));
-            assert!(!str.contains("RawValue"));
-            assert!(!str.contains("$serde_json::private::RawValue"));
-
-            assert_eq!(str, json);
-
-            let _: E = serde_json::from_str(&str).unwrap();
-        }
-    }
+fn broadcast_event(broadcast_tx: &broadcast::Sender<EventServerEvent>, event: EventServerEvent) {
+    let _ = broadcast_tx.send(event);
 }

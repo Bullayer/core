@@ -20,7 +20,7 @@ use alloy_primitives::{Address, FixedBytes, LogData, U256};
 use alloy_rpc_types::{
     pubsub::Params, Block, FeeHistory, Header, Log, Transaction, TransactionReceipt,
 };
-use monad_exec_events::BlockCommitState;
+use monad_execution_engine::events::BlockCommitState;
 use monad_types::BlockId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

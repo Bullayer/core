@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use monad_exec_events::BlockCommitState;
+pub use monad_execution_engine::events::BlockCommitState;
 
 use crate::types::{eth_json::MonadNotification, serialize::SharedJsonSerialized};
 

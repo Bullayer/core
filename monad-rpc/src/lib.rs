@@ -34,7 +34,7 @@ use std::{sync::Arc, time::Duration};
 use actix_web::{web, App, HttpServer};
 use monad_archive::archive_reader::{redact_mongo_url, ArchiveReader};
 use monad_ethcall::EthCallExecutor;
-use monad_event_ring::EventRing;
+use monad_execution_engine::events::ExecutionEvent;
 use tracing::{debug, error, info, warn};
 use tracing_actix_web::TracingLogger;
 
@@ -49,7 +49,6 @@ use self::{
     },
     middleware::{DecompressionGuard, Metrics, TimingMiddleware},
     txpool::EthTxPoolBridgeClient,
-    websocket,
 };
 use monad_triedb_utils::triedb_env::TriedbEnv;
 
@@ -61,6 +60,7 @@ pub async fn start_rpc_server(
     node_name: String,
     chain_id: u64,
     txpool_bridge_client: Option<EthTxPoolBridgeClient>,
+    execution_event_rx: Option<tokio::sync::broadcast::Receiver<ExecutionEvent>>,
 ) -> std::io::Result<()> {
     let concurrent_requests_limiter = Arc::new(tokio::sync::Semaphore::new(
         args.eth_call_max_concurrent_requests as usize,
@@ -204,11 +204,8 @@ pub async fn start_rpc_server(
 
     let decompression_guard = DecompressionGuard::new(args.max_request_size);
 
-    let (events_client, events_for_cache) = if let Some(exec_event_path) = args.exec_event_path {
-        let event_ring =
-            EventRing::new_from_path(exec_event_path).expect("Execution event ring is ready");
-
-        let events_client = EventServer::start(event_ring);
+    let (events_client, events_for_cache) = if let Some(event_rx) = execution_event_rx {
+        let events_client = EventServer::start(event_rx);
 
         let events_for_cache = events_client
             .subscribe()
@@ -217,7 +214,7 @@ pub async fn start_rpc_server(
         (Some(events_client), Some(events_for_cache))
     } else {
         if args.ws_enabled {
-            panic!("exec-event-path is not set but is required for websockets");
+            warn!("execution event channel is not provided but is required for websockets");
         }
 
         (None, None)

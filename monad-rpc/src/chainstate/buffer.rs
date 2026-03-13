@@ -27,7 +27,7 @@ use alloy_rpc_types::{Block, BlockTransactions, Transaction, TransactionReceipt}
 use dashmap::DashMap;
 use itertools::Itertools;
 use monad_eth_types::{BlockHeader, ReceiptWithLogIndex, TxEnvelopeWithSender};
-use monad_exec_events::BlockCommitState;
+use monad_execution_engine::events::BlockCommitState;
 use tokio::sync::Mutex;
 use tracing::{error, warn};
 

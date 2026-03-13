@@ -26,7 +26,7 @@ use actix_ws::{AggregatedMessage, CloseCode, CloseReason, Closed};
 use alloy_rpc_types::eth::{pubsub::Params, Filter, FilteredParams};
 use futures::StreamExt;
 use itertools::Either;
-use monad_exec_events::BlockCommitState;
+use monad_execution_engine::events::BlockCommitState;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -695,7 +695,7 @@ mod tests {
     use awc::error::WsClientError;
     use bytes::Bytes;
     use futures_util::{SinkExt as _, StreamExt as _};
-    use monad_event_ring::SnapshotEventRing;
+    use monad_execution_engine::events::ExecutionEvent;
     use serde_json::json;
     use tokio::sync::Semaphore;
 
@@ -711,17 +711,62 @@ mod tests {
         websocket::handler::{ConnectionLimit, SubscriptionLimit},
     };
 
+    fn create_test_event_channel() -> tokio::sync::broadcast::Receiver<ExecutionEvent> {
+        let (tx, rx) = tokio::sync::broadcast::channel(128);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            for i in 1..=10u64 {
+                let block_id = alloy_primitives::B256::from([i as u8; 32]);
+                let parent_id = if i == 1 {
+                    alloy_primitives::B256::ZERO
+                } else {
+                    alloy_primitives::B256::from([(i - 1) as u8; 32])
+                };
+
+                let header = monad_execution_engine::types::BlockHeader {
+                    number: i,
+                    timestamp: 1_700_000_000 + i,
+                    gas_used: 21000 * i,
+                    parent_hash: parent_id,
+                    ..Default::default()
+                };
+
+                if tx
+                    .send(ExecutionEvent::BlockProposed {
+                        block_number: i,
+                        block_id,
+                        parent_id,
+                        header,
+                        transactions: vec![],
+                        senders: vec![],
+                        receipts: vec![],
+                        eth_block_hash: block_id,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                let _ = tx.send(ExecutionEvent::BlockVoted {
+                    block_number: i,
+                    block_id,
+                });
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+
+        rx
+    }
+
     fn create_test_server() -> actix_test::TestServer {
-        const SNAPSHOT_NAME: &str = "ETHEREUM_MAINNET_30B_15M";
-        const SNAPSHOT_ZSTD_BYTES: &[u8] = include_bytes!(
-            "../../../monad-execution/rust/crates/monad-exec-events/test/data/exec-events-emn-30b-15m/snapshot.zst"
-        );
+        let event_rx = create_test_event_channel();
 
-        let snapshot =
-            SnapshotEventRing::new_from_zstd_bytes(SNAPSHOT_ZSTD_BYTES, SNAPSHOT_NAME).unwrap();
-
-        let ws_server_handle =
-            EventServer::start_for_testing_with_delay(snapshot, Duration::from_secs(1));
+        let ws_server_handle = EventServer::start(event_rx);
 
         let app_state = MonadRpcResources {
             txpool_bridge_client: Some(EthTxPoolBridgeClient::for_testing()),

@@ -112,5 +112,5 @@ async fn main() -> std::io::Result<()> {
     let node_name = node_config.node_name;
     let chain_id = node_config.chain_id;
 
-    monad_rpc::start_rpc_server(args, node_name, chain_id, txpool_bridge_client).await
+    monad_rpc::start_rpc_server(args, node_name, chain_id, txpool_bridge_client, None).await
 }

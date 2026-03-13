@@ -715,7 +715,6 @@ dependencies = [
  "alloy-serde",
  "arbitrary",
  "derive_more",
- "jsonwebtoken",
  "rand 0.8.5",
  "serde",
  "strum",
@@ -4435,21 +4434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jsonwebtoken"
-version = "9.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
-dependencies = [
- "base64 0.22.1",
- "js-sys",
- "pem",
- "ring",
- "serde",
- "serde_json",
- "simple_asn1",
-]
-
-[[package]]
 name = "k256"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5354,28 +5338,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "monad-event-ring"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "cc",
- "cmake",
- "libc",
- "zstd",
-]
-
-[[package]]
-name = "monad-exec-events"
+name = "monad-execution-engine"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
- "alloy-eips",
  "alloy-primitives",
- "alloy-rpc-types",
- "bindgen",
- "itertools 0.10.5",
- "monad-event-ring",
+ "alloy-rlp",
+ "async-trait",
+ "bytes",
+ "hex",
  "serde",
+ "thiserror 1.0.69",
+ "tiny-keccak",
+ "tokio",
  "tracing",
 ]
 
@@ -5454,12 +5429,14 @@ dependencies = [
 name = "monad-ledger"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "futures",
  "monad-block-persist",
  "monad-blocksync",
  "monad-consensus-types",
  "monad-crypto",
  "monad-eth-types",
+ "monad-execution-engine",
  "monad-executor",
  "monad-executor-glue",
  "monad-types",
@@ -5544,6 +5521,7 @@ dependencies = [
 name = "monad-node"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "alloy-rlp",
  "chrono",
  "clap",
@@ -5562,6 +5540,7 @@ dependencies = [
  "monad-eth-block-policy",
  "monad-eth-block-validator",
  "monad-eth-txpool-executor",
+ "monad-execution-engine",
  "monad-executor",
  "monad-executor-glue",
  "monad-keystore",
@@ -5831,8 +5810,7 @@ dependencies = [
  "monad-eth-txpool-types",
  "monad-eth-types",
  "monad-ethcall",
- "monad-event-ring",
- "monad-exec-events",
+ "monad-execution-engine",
  "monad-node-config",
  "monad-pprof",
  "monad-rpc-docs",
@@ -5980,6 +5958,7 @@ dependencies = [
  "monad-crypto",
  "monad-cxx",
  "monad-eth-types",
+ "monad-execution-engine",
  "monad-executor",
  "monad-executor-glue",
  "monad-types",
@@ -6914,16 +6893,6 @@ name = "peak_alloc"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29c4e8e2dd832fd76346468f822e4e600d30ba4e5aa545a128abf12cfae7ea3e"
-
-[[package]]
-name = "pem"
-version = "3.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
-dependencies = [
- "base64 0.22.1",
- "serde_core",
-]
 
 [[package]]
 name = "percent-encoding"
@@ -8412,18 +8381,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a50cb1e76f89e3c076f7ae0a609c4b0033c26034f740eddbeb761b64b2f42980"
 dependencies = [
  "indexmap 1.9.3",
-]
-
-[[package]]
-name = "simple_asn1"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
-dependencies = [
- "num-bigint",
- "num-traits",
- "thiserror 2.0.17",
- "time",
 ]
 
 [[package]]

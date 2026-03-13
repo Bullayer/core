@@ -39,8 +39,10 @@ pub mod bindings {
 }
 
 mod ffi;
+mod in_process_server;
 mod ipc;
 mod outbound_requests;
+mod rust_client;
 
 monad_executor::metric_consts! {
     GAUGE_STATESYNC_SYNCING {
