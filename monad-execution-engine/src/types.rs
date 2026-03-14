@@ -126,7 +126,6 @@ pub struct BlockExecOutput {
     pub eth_header: BlockHeader,
     pub eth_block_hash: B256,
     pub transactions: Vec<Transaction>,
-    pub senders: Vec<Address>,
     pub receipts: Vec<Receipt>,
 }
 
@@ -175,15 +174,4 @@ pub type BlockCache = HashMap<B256, BlockCacheEntry>;
 
 pub struct ChainConfig {
     pub chain_id: U256,
-}
-
-/// Context for block execution: grandparent/parent/current senders and authorities.
-/// Corresponds to C++ ChainContext<traits> (runloop_monad.cpp L268-275).
-#[derive(Clone, Debug, Default)]
-pub struct ChainContext {
-    pub grandparent_senders_and_authorities: HashSet<Address>,
-    pub parent_senders_and_authorities: HashSet<Address>,
-    pub senders_and_authorities: HashSet<Address>,
-    pub senders: Vec<Address>,
-    pub authorities: Vec<Vec<Option<Address>>>,
 }

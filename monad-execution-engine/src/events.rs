@@ -27,7 +27,6 @@ pub enum ExecutionEvent {
         parent_id: B256,
         header: BlockHeader,
         transactions: Vec<Transaction>,
-        senders: Vec<Address>,
         receipts: Vec<Receipt>,
         eth_block_hash: B256,
     },

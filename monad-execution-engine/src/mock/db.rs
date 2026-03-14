@@ -92,7 +92,6 @@ impl ExecutionDb for InMemoryExecutionDb {
         state_deltas: &StateDeltas,
         code: &CodeMap,
         _receipts: &[Receipt],
-        _senders: &[Address],
         _transactions: &[Transaction],
     ) {
         // Apply state deltas

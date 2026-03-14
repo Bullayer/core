@@ -2,7 +2,7 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::B256;
 
 use crate::traits::{BlockExecutor, BlockHashBuffer, ExecutionDb, ExecutionError};
 use crate::types::{Block, BlockExecOutput, ChainConfig};
@@ -28,8 +28,6 @@ impl BlockExecutor for MockBlockExecutor {
         &self,
         _chain: &ChainConfig,
         block: &Block,
-        _senders: &[Address],
-        _authorities: &[Vec<Option<Address>>],
         _db: &mut dyn ExecutionDb,
         _block_hash_buffer: &dyn BlockHashBuffer,
     ) -> Result<BlockExecOutput, ExecutionError> {
@@ -45,7 +43,6 @@ impl BlockExecutor for MockBlockExecutor {
             eth_header: output_header,
             eth_block_hash: block_hash,
             transactions: Vec::new(),
-            senders: Vec::new(),
             receipts: Vec::new(),
         })
     }

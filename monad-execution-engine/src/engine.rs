@@ -7,11 +7,11 @@ use tokio::sync::{broadcast, mpsc};
 use crate::command::ExecutionCommand;
 use crate::events::ExecutionEvent;
 use crate::runloop::runloop_monad;
-use crate::traits::{BlockExecutor, ExecutionDb, SignatureRecovery};
+use crate::traits::{BlockExecutor, ExecutionDb};
 use crate::types::ChainConfig;
 
+const COMMAND_CHANNEL_CAPACITY: usize = 2048;
 const EVENT_CHANNEL_CAPACITY: usize = 4096;
-const COMMAND_CHANNEL_CAPACITY: usize = 1024;
 
 pub struct ExecutionEngine {
     cmd_tx: mpsc::Sender<ExecutionCommand>,
@@ -26,14 +26,13 @@ impl ExecutionEngine {
         chain: ChainConfig,
         db: Box<dyn ExecutionDb>,
         executor: Box<dyn BlockExecutor>,
-        recovery: Box<dyn SignatureRecovery>,
     ) -> (Self, broadcast::Receiver<ExecutionEvent>) {
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (event_tx, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         let event_tx_clone = event_tx.clone();
         let handle = tokio::spawn(async move {
-            runloop_monad(chain, db, executor, recovery, cmd_rx, event_tx_clone).await;
+            runloop_monad(chain, db, executor, cmd_rx, event_tx_clone).await;
         });
 
         let engine = Self {

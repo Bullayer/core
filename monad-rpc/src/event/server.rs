@@ -66,7 +66,6 @@ impl EventServer {
                         block_id,
                         header,
                         transactions,
-                        senders,
                         receipts,
                         eth_block_hash,
                         ..
@@ -83,7 +82,6 @@ impl EventServer {
                             block_id,
                             &header,
                             &transactions,
-                            &senders,
                             &receipts,
                             eth_block_hash,
                         );
@@ -146,7 +144,6 @@ fn build_proposed_block(
     block_id: B256,
     header: &monad_execution_engine::types::BlockHeader,
     transactions: &[monad_execution_engine::types::Transaction],
-    senders: &[alloy_primitives::Address],
     receipts: &[monad_execution_engine::types::Receipt],
     eth_block_hash: B256,
 ) -> ProposedBlock {
@@ -155,7 +152,6 @@ fn build_proposed_block(
 
     let alloy_txs = convert_transactions(
         transactions,
-        senders,
         eth_block_hash,
         header.number,
         base_fee,
@@ -163,7 +159,6 @@ fn build_proposed_block(
 
     let alloy_receipts = convert_receipts(
         transactions,
-        senders,
         receipts,
         eth_block_hash,
         header.number,
@@ -221,7 +216,6 @@ fn convert_header(
 
 fn convert_transactions(
     transactions: &[monad_execution_engine::types::Transaction],
-    senders: &[alloy_primitives::Address],
     block_hash: B256,
     block_number: u64,
     base_fee: Option<u64>,
@@ -285,7 +279,6 @@ fn build_placeholder_tx_envelope(tx_hash: B256) -> alloy_consensus::TxEnvelope {
 
 fn convert_receipts(
     transactions: &[monad_execution_engine::types::Transaction],
-    senders: &[alloy_primitives::Address],
     receipts: &[monad_execution_engine::types::Receipt],
     block_hash: B256,
     block_number: u64,

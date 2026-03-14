@@ -10,13 +10,12 @@ use std::collections::VecDeque;
 use alloy_primitives::B256;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::block_cache::prune_block_cache;
 use crate::block_hash::{BlockHashBufferFinalized, BlockHashChain};
 use crate::command::ExecutionCommand;
 use crate::events::ExecutionEvent;
 use crate::propose::propose_block;
-use crate::traits::{BlockExecutor, ExecutionDb, SignatureRecovery};
-use crate::types::{BlockCache, ChainConfig, ConsensusBody, ConsensusHeader};
+use crate::traits::{BlockExecutor, ExecutionDb};
+use crate::types::{ChainConfig, ConsensusBody, ConsensusHeader};
 use crate::validation::validate_delayed_execution_results;
 
 struct ToExecute {
@@ -29,7 +28,6 @@ struct ToFinalize {
     block_number: u64,
     block_id: B256,
     verified_blocks: Vec<u64>,
-    is_vote: bool,
 }
 
 /// Main execution runloop.
@@ -39,32 +37,22 @@ pub async fn runloop_monad(
     chain: ChainConfig,
     mut db: Box<dyn ExecutionDb>,
     executor: Box<dyn BlockExecutor>,
-    recovery: Box<dyn SignatureRecovery>,
     mut cmd_rx: mpsc::Receiver<ExecutionCommand>,
     event_tx: broadcast::Sender<ExecutionEvent>,
 ) {
     let finalized_n = db.get_latest_finalized_version();
 
-    // C++ L487-497: init block_hash_buffer from DB
     let mut block_hash_buffer = BlockHashBufferFinalized::new();
     if finalized_n != u64::MAX && finalized_n > 0 {
         block_hash_buffer.init_from_db(&*db, finalized_n);
     }
     let mut block_hash_chain = BlockHashChain::new(block_hash_buffer);
 
-    // C++ L499-549: preload block cache from DB for last N blocks
-    let mut block_cache = BlockCache::new();
-    // In mock phase: block cache starts empty. When real EVM is integrated,
-    // we should preload senders_and_authorities from DB for the last few finalized blocks.
-    // This is needed for ChainContext construction in propose_block.
-
-    // C++ L465-467: start_block_num is fixed at runloop start, used for is_first_block
     let start_block_num = if finalized_n == u64::MAX {
         0
     } else {
         finalized_n
     };
-    let mut finalized_block_num = start_block_num;
 
     let mut to_execute: VecDeque<ToExecute> = VecDeque::new();
     let mut to_finalize: VecDeque<ToFinalize> = VecDeque::new();
@@ -73,7 +61,6 @@ pub async fn runloop_monad(
         to_execute.clear();
         to_finalize.clear();
 
-        // Drain all available commands from the channel
         let first_cmd = cmd_rx.recv().await;
         match first_cmd {
             None => break,
@@ -95,7 +82,6 @@ pub async fn runloop_monad(
             continue;
         }
 
-        // Process to_execute queue
         for item in to_execute.drain(..) {
             let block_number = item.header.execution_inputs.number;
 
@@ -114,7 +100,6 @@ pub async fn runloop_monad(
                 continue;
             }
 
-            // C++ L451: is_first_block uses fixed start_block_num, not current finalized
             let is_first_block = block_number == start_block_num;
             match propose_block(
                 item.block_id,
@@ -124,9 +109,7 @@ pub async fn runloop_monad(
                 &chain,
                 &mut *db,
                 &*executor,
-                &*recovery,
                 is_first_block,
-                &mut block_cache,
             ) {
                 Ok(output) => {
                     db.update_proposed_metadata(item.header.seqno, item.block_id);
@@ -137,7 +120,6 @@ pub async fn runloop_monad(
                         parent_id: item.header.parent_id(),
                         header: output.eth_header.clone(),
                         transactions: output.transactions,
-                        senders: output.senders,
                         receipts: output.receipts,
                         eth_block_hash: output.eth_block_hash,
                     });
@@ -150,7 +132,6 @@ pub async fn runloop_monad(
                     );
                 }
                 Err(e) => {
-                    // C++ uses BOOST_OUTCOME_TRY which propagates errors and terminates the runloop.
                     tracing::error!(
                         block_number,
                         block_id = %item.block_id,
@@ -162,20 +143,10 @@ pub async fn runloop_monad(
             }
         }
 
-        // Process to_finalize queue
         for item in to_finalize.drain(..) {
-            if item.is_vote {
-                // Vote: emit BlockVoted, then finalize
-                let _ = event_tx.send(ExecutionEvent::BlockVoted {
-                    block_number: item.block_number,
-                    block_id: item.block_id,
-                });
-            }
-
             tracing::info!(
                 block_number = item.block_number,
                 block_id = %item.block_id,
-                is_vote = item.is_vote,
                 "processing finalization"
             );
             db.finalize(item.block_number, item.block_id);
@@ -186,8 +157,6 @@ pub async fn runloop_monad(
                 block_id: item.block_id,
             });
 
-            finalized_block_num = item.block_number;
-
             if let Some(&last_verified) = item.verified_blocks.last() {
                 if last_verified != u64::MAX {
                     db.update_verified_block(last_verified);
@@ -197,12 +166,9 @@ pub async fn runloop_monad(
                 }
             }
         }
-
-        // Prune block cache
-        prune_block_cache(&mut block_cache, finalized_block_num);
     }
 
-    tracing::info!("runloop exiting");
+    tracing::warn!("runloop exiting");
 }
 
 fn classify_command(
@@ -233,7 +199,6 @@ fn classify_command(
                 block_number,
                 block_id,
                 verified_blocks: Vec::new(),
-                is_vote: true,
             });
         }
         ExecutionCommand::Finalize {
@@ -245,7 +210,6 @@ fn classify_command(
                 block_number,
                 block_id,
                 verified_blocks,
-                is_vote: false,
             });
         }
         ExecutionCommand::Shutdown => {}

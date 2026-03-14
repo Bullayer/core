@@ -32,7 +32,6 @@ pub trait BlockHashBuffer: Send + Sync {
 }
 
 /// Abstraction over the execution database (C++ mpt::Db interface).
-/// Mock version uses HashMap; future version wraps TrieDB.
 pub trait ExecutionDb: Send + Sync {
     fn has_executed(&self, block_id: &B256, seq_num: u64) -> bool;
     fn get_latest_finalized_version(&self) -> u64;
@@ -50,7 +49,6 @@ pub trait ExecutionDb: Send + Sync {
         state_deltas: &StateDeltas,
         code: &CodeMap,
         receipts: &[Receipt],
-        senders: &[Address],
         transactions: &[Transaction],
     );
 
@@ -61,22 +59,12 @@ pub trait ExecutionDb: Send + Sync {
 }
 
 /// Abstraction over the EVM block execution.
-/// Mock version returns deterministic results; future version wraps real EVM.
 pub trait BlockExecutor: Send + Sync {
     fn execute_block(
         &self,
         chain: &ChainConfig,
         block: &Block,
-        senders: &[Address],
-        authorities: &[Vec<Option<Address>>],
         db: &mut dyn ExecutionDb,
         block_hash_buffer: &dyn BlockHashBuffer,
     ) -> Result<BlockExecOutput, ExecutionError>;
-}
-
-/// Abstraction over signature recovery (sender + EIP-7702 authorities).
-/// Mock version extracts from transaction directly.
-pub trait SignatureRecovery: Send + Sync {
-    fn recover_senders(&self, txs: &[Transaction]) -> Vec<Address>;
-    fn recover_authorities(&self, txs: &[Transaction]) -> Vec<Vec<Option<Address>>>;
 }

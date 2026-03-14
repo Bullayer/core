@@ -740,7 +740,6 @@ mod tests {
                         parent_id,
                         header,
                         transactions: vec![],
-                        senders: vec![],
                         receipts: vec![],
                         eth_block_hash: block_id,
                     })

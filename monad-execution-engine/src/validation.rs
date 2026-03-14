@@ -10,7 +10,6 @@ use crate::traits::{BlockHashBuffer, ExecutionError};
 use crate::types::BlockHeader;
 
 /// Validate delayed execution results against the block hash buffer.
-/// Corresponds to C++ validate_delayed_execution_results (L121-152).
 pub fn validate_delayed_execution_results(
     block_hash_buffer: &dyn BlockHashBuffer,
     execution_results: &[BlockHeader],
@@ -47,7 +46,6 @@ pub fn validate_delayed_execution_results(
 }
 
 /// Validate that the execution output matches the proposed header.
-/// Corresponds to C++ validate_live_execution_outputs (L154-172).
 pub fn validate_live_execution_outputs(
     input: &BlockHeader,
     output: &BlockHeader,
@@ -61,7 +59,6 @@ pub fn validate_live_execution_outputs(
     if input.withdrawals_root != output.withdrawals_root {
         return Err(ExecutionError::WrongMerkleRoot);
     }
-    // YP eq. 56
     if output.gas_used > output.gas_limit {
         return Err(ExecutionError::GasAboveLimit);
     }

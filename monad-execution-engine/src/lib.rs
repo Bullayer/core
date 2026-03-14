@@ -2,7 +2,6 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
-pub mod block_cache;
 pub mod block_hash;
 pub mod command;
 pub mod engine;

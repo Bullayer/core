@@ -44,12 +44,11 @@ use monad_validator::signature_collection::SignatureCollection;
 use tracing::{info, trace, warn};
 
 fn block_id_to_b256(id: &BlockId) -> alloy_primitives::B256 {
-    alloy_primitives::B256::from(id.0 .0)
+    alloy_primitives::B256::from(id.0.0)
 }
 
 /// A ledger for committed Ethereum blocks
-/// Blocks are RLP encoded and written to their own individual file, named by the block
-/// number
+/// Blocks are RLP encoded and written to their own individual file, named by the block number
 pub struct MonadBlockFileLedger<ST, SCT>
 where
     ST: CertificateSignatureRecoverable,
@@ -65,13 +64,10 @@ where
     block_payload_cache: HashMap<ConsensusBlockBodyId, ConsensusBlockBody<EthExecutionProtocol>>,
     block_cache_index: BTreeMap<Round, (BlockId, ConsensusBlockBodyId)>,
 
-    fetches_tx:
-        tokio::sync::mpsc::UnboundedSender<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
-    fetches: tokio::sync::mpsc::UnboundedReceiver<
-        BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>,
-    >,
+    fetches_tx: tokio::sync::mpsc::UnboundedSender<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
+    fetches: tokio::sync::mpsc::UnboundedReceiver<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
 
-    execution_tx: Option<tokio::sync::mpsc::Sender<ExecutionCommand>>,
+    execution_tx: tokio::sync::mpsc::Sender<ExecutionCommand>,
 
     phantom: PhantomData<ST>,
 }
@@ -96,7 +92,7 @@ where
     ST: CertificateSignatureRecoverable,
     SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
 {
-    pub fn new(ledger_path: PathBuf) -> Self {
+    pub fn new(ledger_path: PathBuf, exec_tx: tokio::sync::mpsc::Sender<ExecutionCommand>) -> Self {
         match std::fs::create_dir(&ledger_path) {
             Ok(_) => (),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => (),
@@ -121,15 +117,10 @@ where
             fetches_tx,
             fetches,
 
-            execution_tx: None,
+            execution_tx: exec_tx,
 
             phantom: PhantomData,
         }
-    }
-
-    /// Set the execution engine command sender for in-process execution.
-    pub fn set_execution_sender(&mut self, tx: tokio::sync::mpsc::Sender<ExecutionCommand>) {
-        self.execution_tx = Some(tx);
     }
 
     pub fn last_commit(&self) -> Option<SeqNum> {
@@ -154,7 +145,6 @@ where
         if let Some((block_id, payload_id)) = maybe_removed {
             // in the case of equivocated tips, replacing the old tip here may not be optimal
             // however, this does not matter because the cache is just there for a fast-path
-            //
             // all reads are backed by disk
             self.block_cache.remove(&block_id);
             self.block_payload_cache.remove(&payload_id);
@@ -184,8 +174,6 @@ where
     }
 
     fn write_bft_block(&mut self, full_block: &ConsensusFullBlock<ST, SCT, EthExecutionProtocol>) {
-        // unwrap because failure to persist a finalized block is fatal error
-
         // write payload first so that header always points to payload that exists
         self.bft_block_persist
             .write_bft_body(full_block.body())
@@ -209,10 +197,9 @@ where
         let mut headers = VecDeque::new();
         while (headers.len() as u64) < block_range.num_blocks.0 {
             let block_header = if let Some(cached_block) = self.block_cache.get(&next_block_id) {
-                cached_block.header().clone()
+                (*cached_block.header()).clone()
             } else if self.is_cache_hydrated() {
                 // as soon as cache is fully hydrated, we refuse to read from disk
-                //
                 // a hydrated cache that's unable to service a request implies the
                 // request is for a stale range
                 trace!(
@@ -289,31 +276,28 @@ where
                         self.bft_block_persist
                             .update_proposed_head(&block.get_id())
                             .unwrap();
-                    }
 
-                    // Send Propose command to ExecutionEngine if configured
-                    if let Some(ref tx) = self.execution_tx {
-                        let _ = tx.try_send(ExecutionCommand::Propose {
-                            block_id: block_id_to_b256(&block.get_id()),
-                            header: monad_execution_engine::types::ConsensusHeader {
-                                seqno: block.get_seq_num().0,
-                                parent_id: block_id_to_b256(&block.header().get_parent_id()),
-                                block_body_id: alloy_primitives::B256::ZERO,
-                                block_round: block.get_block_round().0,
-                                epoch: 0,
-                                timestamp_ns: 0,
-                                author: [0u8; 33],
-                                execution_inputs: monad_execution_engine::types::BlockHeader::default(),
-                                delayed_execution_results: Vec::new(),
-                                base_fee_trend: 0,
-                                base_fee_moment: 0,
-                            },
-                            body: monad_execution_engine::types::ConsensusBody {
-                                transactions: Vec::new(),
-                                ommers: Vec::new(),
-                                withdrawals: Vec::new(),
-                            },
-                        });
+                            self.execution_tx.try_send(ExecutionCommand::Propose {
+                                block_id: block_id_to_b256(&block.get_id()),
+                                header: monad_execution_engine::types::ConsensusHeader {
+                                    seqno: block.get_seq_num().0,
+                                    parent_id: block_id_to_b256(&block.get_parent_id()),
+                                    block_body_id: alloy_primitives::B256::from(block.get_body_id().0.0),
+                                    block_round: block.get_block_round().0,
+                                    epoch: block.get_epoch().0,
+                                    timestamp_ns: block.get_timestamp(),
+                                    author: [0u8; 33],
+                                    execution_inputs: monad_execution_engine::types::BlockHeader::default(),
+                                    delayed_execution_results: Vec::new(),
+                                    base_fee_trend: 0,
+                                    base_fee_moment: 0,
+                                },
+                                body: monad_execution_engine::types::ConsensusBody {
+                                    transactions: Vec::new(),
+                                    ommers: Vec::new(),
+                                    withdrawals: Vec::new(),
+                                },
+                            }).unwrap();
                     }
 
                     self.update_cache(block);
@@ -325,12 +309,10 @@ where
 
                     self.bft_block_persist.update_voted_head(&block_id).unwrap();
 
-                    if let Some(ref tx) = self.execution_tx {
-                        let _ = tx.try_send(ExecutionCommand::Vote {
-                            block_number: block_seq,
-                            block_id: block_id_to_b256(&block_id),
-                        });
-                    }
+                    self.execution_tx.try_send(ExecutionCommand::Vote {
+                        block_number: block_seq,
+                        block_id: block_id_to_b256(&block_id),
+                    }).unwrap();
                 }
                 LedgerCommand::LedgerCommit(OptimisticCommit::Finalized(block)) => {
                     self.metrics[GAUGE_EXECUTION_LEDGER_NUM_COMMITS] += 1;
@@ -348,16 +330,13 @@ where
                         .update_finalized_head(&block_id)
                         .unwrap();
 
-                    if let Some(ref tx) = self.execution_tx {
-                        let _ = tx.try_send(ExecutionCommand::Finalize {
-                            block_number: block_num,
-                            block_id: block_id_to_b256(&block_id),
-                            verified_blocks: Vec::new(),
-                        });
-                    }
+                    self.execution_tx.try_send(ExecutionCommand::Finalize {
+                        block_number: block_num,
+                        block_id: block_id_to_b256(&block_id),
+                        verified_blocks: Vec::new(),
+                    }).unwrap();
                 }
                 LedgerCommand::LedgerFetchHeaders(block_range) => {
-                    // TODO cap max concurrent LedgerFetch? DOS vector
                     let fetches_tx = self.fetches_tx.clone();
                     let response = BlockSyncResponseMessage::HeadersResponse(
                         self.ledger_fetch_headers(block_range),

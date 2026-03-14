@@ -977,8 +977,8 @@ async fn fetch_bloom_filtered_header_transactions_receipts_from_archive(
         body:
             alloy_consensus::BlockBody {
                 transactions,
-                ommers,
-                withdrawals,
+                ommers: _,
+                withdrawals: _,
             },
     } = archive_reader
         .get_block_by_number(block_number)

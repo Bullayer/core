@@ -5,5 +5,4 @@
 pub mod db;
 pub mod ethcall;
 pub mod executor;
-pub mod recovery;
 pub mod statesync;

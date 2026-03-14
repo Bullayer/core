@@ -235,15 +235,13 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         },
         Box::new(InMemoryExecutionDb::new()),
         Box::new(MockBlockExecutor::new()),
-        Box::new(MockSignatureRecovery::new()),
     );
-    let execution_cmd_tx = execution_engine.command_sender();
 
     let mut executor = ParentExecutor {
         metrics: Default::default(),
         router,
         timer: TokioTimer::default(),
-        ledger: MonadBlockFileLedger::new(node_state.ledger_path),
+        ledger: MonadBlockFileLedger::new(node_state.ledger_path, execution_engine.command_sender()),
         config_file: ConfigFile::new(
             node_state.forkpoint_path,
             node_state.validators_path.clone(),
@@ -354,8 +352,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         ),
         config_loader: ConfigLoader::new(node_state.node_config_path),
     };
-
-    executor.ledger.set_execution_sender(execution_cmd_tx);
 
     let logger_config: WALoggerConfig<LogFriendlyMonadEvent<_, _, _>> = WALoggerConfig::new(
         node_state.wal_path.clone(), // output wal path

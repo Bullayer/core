@@ -101,7 +101,6 @@ pub struct ParentExecutor<R, T, L, C, V, TS, TP, CP, LO, SS, CL> {
     pub loopback: LO,
     pub state_sync: SS,
     pub config_loader: CL,
-    // if you add an executor here, you must add it to BOTH exec AND poll_next !
 }
 
 impl<RE, TE, LE, CE, SE, TSE, TPE, CPE, LOE, SSE, CLE, E, OM, ST, SCT, EPT, BPT, SBT, CCT, CRT>

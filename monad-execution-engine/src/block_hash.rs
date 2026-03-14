@@ -191,7 +191,6 @@ struct Proposal {
 }
 
 /// Manages multiple proposal branches on top of a finalized hash buffer.
-/// Corresponds to C++ BlockHashChain.
 pub struct BlockHashChain {
     finalized: BlockHashBufferFinalized,
     proposals: VecDeque<Proposal>,
@@ -214,7 +213,6 @@ impl BlockHashChain {
     }
 
     /// Find the hash buffer for the chain ending at parent_id.
-    /// C++: iterates from begin to end (oldest first).
     pub fn find_chain(&self, parent_id: &B256) -> BlockHashBufferRef<'_> {
         for proposal in &self.proposals {
             if proposal.block_id == *parent_id {
@@ -225,7 +223,6 @@ impl BlockHashChain {
     }
 
     /// Record a new proposal's block hash.
-    /// C++: finds parent in proposals (begin to end), creates BlockHashBufferProposal.
     pub fn propose(
         &mut self,
         eth_block_hash: B256,
@@ -233,7 +230,6 @@ impl BlockHashChain {
         block_id: B256,
         parent_id: B256,
     ) {
-        // Look for parent proposal (C++ iterates begin to end)
         let parent_buf = self.proposals.iter().find(|p| p.block_id == parent_id);
 
         let buf = if let Some(parent) = parent_buf {
