@@ -30,7 +30,7 @@ use monad_chain_config::{revision::ChainRevision, ChainConfig};
 use monad_consensus_types::{
     block::{
         AccountBalanceState, BlockPolicy, BlockPolicyBlockValidatorError, BlockPolicyError,
-        ConsensusFullBlock, TxnFee, TxnFees,
+        ConsensusFullBlock,
     },
     checkpoint::RootInfo,
 };
@@ -43,7 +43,7 @@ use monad_eth_types::{
 use monad_state_backend::{StateBackend, StateBackendError};
 use monad_system_calls::validator::{SystemTransactionValidationError, SystemTransactionValidator};
 use monad_types::{
-    Balance, BlockId, Epoch, Nonce, Round, SeqNum, GENESIS_BLOCK_ID, GENESIS_ROUND, GENESIS_SEQ_NUM,
+    BlockId, Epoch, Nonce, Round, SeqNum, GENESIS_BLOCK_ID, GENESIS_ROUND, GENESIS_SEQ_NUM,
 };
 use monad_validator::signature_collection::SignatureCollection;
 use sorted_vector_map::SortedVectorMap;
@@ -53,12 +53,6 @@ use self::nonce_usage::{NonceUsage, NonceUsageMap};
 
 pub mod nonce_usage;
 pub mod validation;
-
-pub enum ReserveBalanceCheck {
-    Insert,
-    Propose,
-    Validate,
-}
 
 pub fn compute_txn_max_value(txn: &TxEnvelope, base_fee: u64) -> U256 {
     let txn_value = txn.value();
@@ -85,6 +79,7 @@ pub fn compute_txn_max_gas_cost(txn: &TxEnvelope, base_fee: u64) -> U256 {
     gas_limit.checked_mul(gas_bid).expect("no overflow")
 }
 
+#[allow(dead_code)]
 struct BlockLookupIndex {
     block_id: BlockId,
     seq_num: SeqNum,
@@ -104,7 +99,6 @@ where
     pub system_txns: Vec<ValidatedTx>,
     pub validated_txns: Vec<ValidatedTx>,
     pub nonce_usages: NonceUsageMap,
-    pub txn_fees: TxnFees,
 }
 
 impl<ST, SCT> AsRef<EthValidatedBlock<ST, SCT>> for EthValidatedBlock<ST, SCT>
@@ -160,17 +154,6 @@ where
 {
 }
 
-#[derive(Debug)]
-struct BlockTxnFeeStates {
-    txn_fees: TxnFees,
-}
-
-impl BlockTxnFeeStates {
-    fn get(&self, eth_address: &Address) -> Option<TxnFee> {
-        self.txn_fees.get(eth_address).cloned()
-    }
-}
-
 #[allow(dead_code)]
 #[derive(Debug)]
 struct CommittedBlock {
@@ -180,7 +163,6 @@ struct CommittedBlock {
     seq_num: SeqNum,
     nonce_usages: NonceUsageMap,
     timestamp_ns: u128,
-    fees: BlockTxnFeeStates,
 
     base_fee: u64,
     base_fee_trend: u64,
@@ -222,51 +204,30 @@ where
         &self,
         account_balance: &mut AccountBalanceState,
         eth_address: &Address,
-        execution_delay: SeqNum,
+        _execution_delay: SeqNum,
         emptying_txn_check_block_range: Range<SeqNum>,
-        reserve_balance_check_block_range: RangeFrom<SeqNum>,
-        chain_config: &CCT,
+        fee_check_block_range: RangeFrom<SeqNum>,
+        _chain_config: &CCT,
     ) -> Result<SeqNum, BlockPolicyError> {
         trace!(
             ?emptying_txn_check_block_range,
-            ?reserve_balance_check_block_range,
+            ?fee_check_block_range,
             ?account_balance,
             ?eth_address,
             "before update_account_balance"
         );
 
         let mut next_validate = emptying_txn_check_block_range.start;
-        for (seq_num, block) in self.blocks.range(emptying_txn_check_block_range) {
+        for (seq_num, _block) in self.blocks.range(emptying_txn_check_block_range) {
             assert_eq!(*seq_num, next_validate, "Emptying range is not contiguous");
-
-            if block.fees.get(eth_address).is_some()
-                && account_balance.block_seqnum_of_latest_txn < block.seq_num
-            {
-                account_balance.block_seqnum_of_latest_txn = block.seq_num;
-            }
             next_validate += SeqNum(1);
         }
 
-        for (seq_num, block) in self.blocks.range(reserve_balance_check_block_range) {
+        for (seq_num, _block) in self.blocks.range(fee_check_block_range) {
             assert_eq!(
                 *seq_num, next_validate,
-                "Reserve balance check range is not contiguous"
+                "Fee check range is not contiguous"
             );
-
-            if let Some(block_txn_fees) = block.fees.get(eth_address) {
-                let validator = EthBlockPolicyBlockValidator::new(
-                    block.seq_num,
-                    execution_delay,
-                    block.base_fee,
-                    &chain_config.get_chain_revision(block.round),
-                )?;
-                trace!(
-                    "applying fees for block {:?}, curr acc balance: {:?}",
-                    block.seq_num,
-                    account_balance
-                );
-                validator.try_apply_block_fees(account_balance, &block_txn_fees, eth_address)?;
-            }
             next_validate += SeqNum(1);
         }
 
@@ -315,9 +276,6 @@ where
                     seq_num: block.get_seq_num(),
                     nonce_usages: block.nonce_usages.clone(),
                     timestamp_ns: block.get_timestamp(),
-                    fees: BlockTxnFeeStates {
-                        txn_fees: block.txn_fees.clone()
-                    },
 
                     base_fee: block.block.header().base_fee,
                     base_fee_trend: block.block.header().base_fee_trend,
@@ -329,6 +287,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub struct EthBlockPolicyBlockValidator<CRT>
 where
     CRT: ChainRevision,
@@ -379,98 +338,6 @@ where
         })
     }
 
-    pub fn try_apply_block_fees(
-        &self,
-        account_balance: &mut AccountBalanceState,
-        block_txn_fees: &TxnFee,
-        eth_address: &Address,
-    ) -> Result<(), BlockPolicyError> {
-        let max_reserve_balance =
-            Balance::from(self.chain_revision.chain_params().max_reserve_balance);
-
-        let is_possibly_emptying_transaction = is_possibly_emptying_transaction(
-            self.block_seq_num,
-            account_balance,
-            self.execution_delay,
-        );
-        let has_emptying_transaction =
-            is_possibly_emptying_transaction && !block_txn_fees.delegation_before_first_txn;
-
-        let mut block_gas_cost = block_txn_fees.max_gas_cost;
-        if has_emptying_transaction {
-            if account_balance.balance < block_txn_fees.first_txn_gas {
-                trace!(
-                    "Block with insufficient balance: {:?} \
-                            first txn value {:?} \
-                            first txn gas {:?} \
-                            block seq_num {:?} \
-                            address: {:?}",
-                    account_balance,
-                    block_txn_fees.first_txn_value,
-                    block_txn_fees.first_txn_gas,
-                    self.block_seq_num,
-                    eth_address,
-                );
-                return Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                    BlockPolicyBlockValidatorError::InsufficientBalance,
-                ));
-            }
-            let first_txn_cost = block_txn_fees
-                .first_txn_value
-                .saturating_add(block_txn_fees.first_txn_gas);
-            let estimated_balance = account_balance.balance.saturating_sub(first_txn_cost);
-
-            account_balance.remaining_reserve_balance = estimated_balance.min(max_reserve_balance);
-            account_balance.balance = estimated_balance;
-
-            trace!(
-                "Block has emptying txn. updated balance: {:?} \
-                        first txn value {:?} \
-                        first txn gas {:?} \
-                        block seq_num {:?} \
-                        address: {:?}",
-                account_balance,
-                block_txn_fees.first_txn_value,
-                block_txn_fees.first_txn_gas,
-                self.block_seq_num,
-                eth_address,
-            );
-        } else {
-            block_gas_cost = block_txn_fees
-                .max_gas_cost
-                .saturating_add(block_txn_fees.first_txn_gas);
-        }
-
-        if account_balance.remaining_reserve_balance < block_gas_cost {
-            trace!(
-                "Block with insufficient reserve balance: {:?} \
-                            max gas cost {:?} \
-                            block seq_num {:?} \
-                            address: {:?}",
-                account_balance,
-                block_gas_cost,
-                self.block_seq_num,
-                eth_address,
-            );
-            return Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance,
-            ));
-        }
-        account_balance.remaining_reserve_balance = account_balance
-            .remaining_reserve_balance
-            .saturating_sub(block_gas_cost);
-        account_balance.block_seqnum_of_latest_txn = self.block_seq_num;
-        account_balance.is_delegated |= block_txn_fees.is_delegated;
-
-        trace!(
-            ?account_balance,
-            ?self.block_seq_num,
-            ?eth_address,
-            "try_apply_block_fees updated balance state",
-        );
-        Ok(())
-    }
-
     pub fn try_add_transaction(
         &self,
         account_balances: &mut BTreeMap<&Address, AccountBalanceState>,
@@ -504,7 +371,6 @@ where
             .any(|auth| auth.authority() == Some(eth_address));
         let is_emptying_transaction = is_emptying_transaction && !contains_self_authorization;
 
-        // if an account for txn T is not delegated and has no prior txns, then T can charge into reserve.
         if is_emptying_transaction {
             let txn_max_gas = compute_txn_max_gas_cost(txn, self.base_fee);
             if account_balance.balance < txn_max_gas {
@@ -514,7 +380,7 @@ where
                     ?txn_max_gas,
                     ?txn,
                     ?is_emptying_transaction,
-                    "Emptying txn can not be accepted insufficient reserve balance"
+                    "Emptying txn can not be accepted insufficient balance"
                 );
                 return Err(BlockPolicyError::BlockPolicyBlockValidatorError(
                     BlockPolicyBlockValidatorError::InsufficientBalance,
@@ -523,47 +389,41 @@ where
 
             let txn_max_cost = compute_txn_max_value(txn, self.base_fee);
             let estimated_balance = account_balance.balance.saturating_sub(txn_max_cost);
-            let reserve_balance = account_balance.max_reserve_balance.min(estimated_balance);
 
             trace!(
                 "New emptying txn. balance: {:?} \
                     txn_max_cost {:?} \
                     txn_max_gas {:?} \
                     estimated_balance {:?} \
-                    new reserve balance {:?} \
                     block seq_num {:?} \
                     address: {:?}",
                 account_balance,
                 txn_max_cost,
                 txn_max_gas,
                 estimated_balance,
-                reserve_balance,
                 self.block_seq_num,
                 eth_address,
             );
             account_balance.balance = estimated_balance;
-            account_balance.remaining_reserve_balance = reserve_balance;
             account_balance.block_seqnum_of_latest_txn = self.block_seq_num;
         } else {
             let txn_max_gas = compute_txn_max_gas_cost(txn, self.base_fee);
-            if account_balance.remaining_reserve_balance < txn_max_gas {
+            if account_balance.balance < txn_max_gas {
                 trace!(
                     seq_num =?self.block_seq_num,
                     ?account_balance,
                     ?txn_max_gas,
                     ?txn,
                     ?is_emptying_transaction,
-                    "Non-emptying txn can not be accepted insufficient reserve balance"
+                    "Non-emptying txn can not be accepted insufficient balance"
                 );
                 return Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                    BlockPolicyBlockValidatorError::InsufficientReserveBalance,
+                    BlockPolicyBlockValidatorError::InsufficientBalance,
                 ));
             }
-            let reserve_balance = account_balance
-                .remaining_reserve_balance
+            account_balance.balance = account_balance
+                .balance
                 .saturating_sub(txn_max_gas);
-
-            account_balance.remaining_reserve_balance = reserve_balance;
             account_balance.block_seqnum_of_latest_txn = self.block_seq_num;
         }
 
@@ -793,14 +653,6 @@ where
         assert_eq!(GENESIS_SEQ_NUM, SeqNum(0));
         let base_seq_num = consensus_block_seq_num.max(self.execution_delay) - self.execution_delay;
 
-        let block_index = self.get_block_index(&extending_blocks, &base_seq_num)?;
-        let base_max_reserve_balance = Balance::from(
-            chain_config
-                .get_chain_revision(block_index.round)
-                .chain_params()
-                .max_reserve_balance,
-        );
-
         let addresses = addresses.unique().collect_vec();
         let account_balances = self
             .get_account_statuses(
@@ -811,18 +663,13 @@ where
             )?
             .into_iter()
             .map(|maybe_status| {
-                maybe_status.map_or(
-                    AccountBalanceState::new(base_max_reserve_balance),
-                    |status| {
-                        AccountBalanceState {
-                            balance: status.balance,
-                            remaining_reserve_balance: status.balance.min(base_max_reserve_balance),
-                            max_reserve_balance: base_max_reserve_balance,
-                            block_seqnum_of_latest_txn: base_seq_num, // most pessimistic assumption
-                            is_delegated: status.is_delegated,
-                        }
-                    },
-                )
+                maybe_status.map_or(AccountBalanceState::new(), |status| {
+                    AccountBalanceState {
+                        balance: status.balance,
+                        block_seqnum_of_latest_txn: base_seq_num, // most pessimistic assumption
+                        is_delegated: status.is_delegated,
+                    }
+                })
             })
             .collect_vec();
 
@@ -832,9 +679,9 @@ where
                 .zip_eq(account_balances)
                 .map(|(address, mut balance_state)| {
                     // N - k + 1
-                    let reserve_balance_check_start = base_seq_num + SeqNum(1);
+                    let fee_check_start = base_seq_num + SeqNum(1);
                     // N - 2k + 2
-                    let mut emptying_txn_check_start = (reserve_balance_check_start + SeqNum(1))
+                    let mut emptying_txn_check_start = (fee_check_start + SeqNum(1))
                         .max(self.execution_delay)
                         - self.execution_delay;
 
@@ -844,59 +691,32 @@ where
 
                     // N - 2k + 2 (inclusive) to N - k + 1 (non inclusive)
                     let emptying_txn_check_block_range =
-                        emptying_txn_check_start..reserve_balance_check_start;
+                        emptying_txn_check_start..fee_check_start;
                     // N - k + 1 (inclusive) to N (non inclusive)
-                    let reserve_balance_check_block_range = reserve_balance_check_start..;
+                    let fee_check_block_range = fee_check_start..;
 
                     if emptying_txn_check_start > GENESIS_SEQ_NUM {
                         balance_state.block_seqnum_of_latest_txn =
                             emptying_txn_check_start - SeqNum(1);
                     }
 
-                    // check for emptying txs and reserve balance in committed blocks
+                    // check for emptying txs and apply fees in committed blocks
                     let mut next_validate = self.committed_cache.update_account_balance(
                         &mut balance_state,
                         address,
                         self.execution_delay,
                         emptying_txn_check_block_range,
-                        reserve_balance_check_block_range,
+                        fee_check_block_range,
                         chain_config,
                     )?;
 
-                    // check for emptying txs and reserve balance in extending blocks
                     if let Some(blocks) = extending_blocks {
-                        // handle the case where base_seq_num is a pending block
                         let next_blocks = blocks
                             .iter()
                             .skip_while(move |block| block.get_seq_num() < next_validate);
 
                         for extending_block in next_blocks {
                             assert_eq!(next_validate, extending_block.get_seq_num());
-
-                            if let Some(txn_fee) = extending_block.txn_fees.get(address) {
-                                // if still within check emptying range, update latest tx seq num
-                                // otherwise check for reserve balance
-                                if next_validate < reserve_balance_check_start {
-                                    if balance_state.block_seqnum_of_latest_txn < next_validate {
-                                        balance_state.block_seqnum_of_latest_txn =
-                                            extending_block.get_seq_num();
-                                    }
-                                } else {
-                                    let validator = EthBlockPolicyBlockValidator::new(
-                                        extending_block.get_seq_num(),
-                                        self.execution_delay,
-                                        extending_block.get_base_fee(),
-                                        &chain_config
-                                            .get_chain_revision(extending_block.get_block_round()),
-                                    )?;
-
-                                    validator.try_apply_block_fees(
-                                        &mut balance_state,
-                                        txn_fee,
-                                        address,
-                                    )?;
-                                }
-                            }
                             next_validate += SeqNum(1);
                         }
                     }
@@ -1341,7 +1161,6 @@ mod test {
     type ChainConfigType = MockChainConfig;
     type ChainRevisionType = MockChainRevision;
 
-    const RESERVE_BALANCE: u128 = 10_000_000_000_000_000_000; // 10 MON
     const EXEC_DELAY: SeqNum = SeqNum(3);
 
     const ONE_ETHER: u128 = 1_000_000_000_000_000_000;
@@ -1349,7 +1168,7 @@ mod test {
     const CHAIN_ID: u64 = 1337;
 
     enum CoherencyCheckMode {
-        ReserveBalanceCoherency,
+        BalanceCoherency,
         NonceCoherency,
     }
 
@@ -1441,11 +1260,10 @@ mod test {
                 #[allow(clippy::missing_transmute_annotations)]
                 std::mem::transmute(consensus_test_block.nonce_usages)
             },
-            txn_fees: consensus_test_block.txn_fees,
         }
     }
 
-    fn reserve_balance_coherency(
+    fn balance_coherency(
         block_policy: EthBlockPolicy<
             SignatureType,
             SignatureCollectionType,
@@ -1550,7 +1368,7 @@ mod test {
         let extending_blocks = blocks[num_committed_blocks..4].iter().collect();
 
         match coherency_check_mode {
-            CoherencyCheckMode::ReserveBalanceCoherency => reserve_balance_coherency(
+            CoherencyCheckMode::BalanceCoherency => balance_coherency(
                 block_policy,
                 incoming_block,
                 extending_blocks,
@@ -1569,7 +1387,7 @@ mod test {
 
     #[test_case(3; "three committed blocks, one extending block")]
     #[test_case(0; "no committed blocks, four extending block")]
-    fn test_check_reserve_balance_coherency(num_committed_blocks: usize) {
+    fn test_check_balance_coherency(num_committed_blocks: usize) {
         //////////////////////////////////////////////////////////////////
         // Case1: Single emptying transaction                          ///
         //////////////////////////////////////////////////////////////////
@@ -1591,7 +1409,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -1605,7 +1423,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
@@ -1620,7 +1438,7 @@ mod test {
         // Case2: Emptying transaction + another transaction in same block              ///
         ///////////////////////////////////////////////////////////////////////////////////
 
-        // first tx dips into reserve balance, second tx has gas cost less than remaining reserve balance
+        // emptying tx + second tx with sufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
         let txs = BTreeMap::from([(4, vec![tx1, tx2])]); // txs in block n
@@ -1636,11 +1454,11 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
-        // first tx dips into reserve balance, second tx has gas cost more than balance estimate
+        // emptying tx + second tx with insufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
         let txs = BTreeMap::from([(4, vec![tx1, tx2])]); // txs in block n
@@ -1658,21 +1476,20 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
             Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                BlockPolicyBlockValidatorError::InsufficientBalance
             )),
             "Block coherency check should have failed: {:?}",
             result
         );
 
-        // first tx doesn't dip into reserve balance, second tx has gas cost more than max reserve balance
+        // second tx has high gas cost but sufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE + 1;
-        let tx2 = make_test_tx(gas_limit, HALF_ETHER, 1, S1);
+        let tx2 = make_test_tx(100_000_000, HALF_ETHER, 1, S1);
         let txs = BTreeMap::from([(4, vec![tx1, tx2])]); // txs in block n
 
         // balance of signer at block n-3
@@ -1687,38 +1504,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
-        );
-        assert_eq!(
-            result,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            )),
-            "Block coherency check should have failed: {:?}",
-            result
-        );
-
-        // first tx doesn't dip into reserve balance, second tx has gas cost equal to max reserve balance
-        let tx1 = make_test_tx(50000, 0, 0, S1);
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE;
-        let tx2 = make_test_tx(gas_limit, HALF_ETHER, 1, S1);
-        let txs = BTreeMap::from([(4, vec![tx1, tx2])]); // txs in block n
-
-        // balance of signer at block n-3
-        let first_tx_gas_cost = 50000 * BASE_FEE as u128;
-        let second_tx_gas_cost = RESERVE_BALANCE;
-        let balance = first_tx_gas_cost + second_tx_gas_cost;
-        let state_backend = NopStateBackend {
-            balances: BTreeMap::from([(signer, U256::from(balance))]),
-            ..Default::default()
-        };
-
-        let result = setup_block_policy_with_txs(
-            txs,
-            vec![signer],
-            &state_backend,
-            num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -1726,7 +1512,7 @@ mod test {
         // Case3: Emptying transaction + another transaction in different block         ///
         ///////////////////////////////////////////////////////////////////////////////////
 
-        // first tx dips into reserve balance, second tx has gas cost less than remaining reserve balance
+        // emptying tx + second tx in different block with sufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
         // first tx in block n-2, second tx in block n
@@ -1743,11 +1529,11 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
-        // first tx dips into reserve balance, second tx has gas cost more than balance estimate
+        // emptying tx + second tx with insufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
         // first tx in block n-2, second tx in block n
@@ -1766,21 +1552,20 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
             Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                BlockPolicyBlockValidatorError::InsufficientBalance
             )),
             "Block coherency check should have failed: {:?}",
             result
         );
 
-        // first tx doesn't dip into reserve balance, second tx has gas cost more than max reserve balance
+        // second tx has high gas cost but sufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE + 1;
-        let tx2 = make_test_tx(gas_limit, HALF_ETHER, 1, S1);
+        let tx2 = make_test_tx(100_000_000, HALF_ETHER, 1, S1);
         // first tx in block n-2, second tx in block n
         let txs = BTreeMap::from([(2, vec![tx1]), (4, vec![tx2])]);
 
@@ -1796,39 +1581,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
-        );
-        assert_eq!(
-            result,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            )),
-            "Block coherency check should have failed: {:?}",
-            result
-        );
-
-        // first tx doesn't dip into reserve balance, second tx has gas cost equal to max reserve balance
-        let tx1 = make_test_tx(50000, 0, 0, S1);
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE;
-        let tx2 = make_test_tx(gas_limit, HALF_ETHER, 1, S1);
-        // first tx in block n-2, second tx in block n
-        let txs = BTreeMap::from([(2, vec![tx1]), (4, vec![tx2])]);
-
-        // balance of signer at block n-3
-        let first_tx_gas_cost = 50000 * BASE_FEE as u128;
-        let second_tx_gas_cost = RESERVE_BALANCE;
-        let balance = first_tx_gas_cost + second_tx_gas_cost;
-        let state_backend = NopStateBackend {
-            balances: BTreeMap::from([(signer, U256::from(balance))]),
-            ..Default::default()
-        };
-
-        let result = setup_block_policy_with_txs(
-            txs,
-            vec![signer],
-            &state_backend,
-            num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -1836,7 +1589,7 @@ mod test {
         // Case4: Non-emptying transaction + another transaction in different block     ///
         ///////////////////////////////////////////////////////////////////////////////////
 
-        // only gas cost of transactions are taken into account, txn value is not included when calculating reserve balance
+        // only gas cost of transactions are taken into account for non-emptying transactions
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
         let tx3 = make_test_tx(50000, HALF_ETHER, 2, S1);
@@ -1855,7 +1608,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -1878,24 +1631,21 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
             Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                BlockPolicyBlockValidatorError::InsufficientBalance
             )),
             "Block coherency check should have failed: {:?}",
             result
         );
 
-        // transactions exceed max reserve balance
+        // transactions with high gas cost but sufficient balance
         let tx1 = make_test_tx(50000, ONE_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
-        let tx2_gas_cost = 50000 * BASE_FEE as u128;
-        let tx3_gas_cost = RESERVE_BALANCE - tx2_gas_cost;
-        let gas_limit = tx3_gas_cost as u64 / BASE_FEE;
-        let tx3 = make_test_tx(gas_limit + 1, HALF_ETHER, 2, S1);
+        let tx3 = make_test_tx(100_000_000, HALF_ETHER, 2, S1);
         // first tx in block n-3, second tx in block n-2, third tx in block n
         let txs = BTreeMap::from([(1, vec![tx1]), (2, vec![tx2]), (4, vec![tx3])]);
 
@@ -1911,16 +1661,9 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
-        assert_eq!(
-            result,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            )),
-            "Block coherency check should have failed: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
         //////////////////////////////////////////////////////////////////////////////////////////////////////
         // Case5: Non-emptying transaction (7702 delegations) + another transaction in different block     ///
@@ -1958,7 +1701,7 @@ mod test {
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -2001,7 +1744,7 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -2054,7 +1797,7 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
@@ -2062,8 +1805,8 @@ mod test {
         // Case8: Emptying transactions then delegation later in the same block   ///
         /////////////////////////////////////////////////////////////////////////////
 
-        // first tx is an emptying transaction that transfer out all balance
-        // second tx has insufficient reserve balance to include gas cost
+        // first tx is an emptying transaction that transfers out all balance
+        // second tx has insufficient balance to include gas cost
         // third tx is a delegation transaction by sender of first two txns
         let tx1 = make_test_tx(50000, HALF_ETHER, 0, S1);
         let tx2 = make_test_tx(50000, HALF_ETHER, 1, S1);
@@ -2100,12 +1843,12 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
             Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                BlockPolicyBlockValidatorError::InsufficientBalance
             )),
             "Block coherency check should have failed: {:?}",
             result
@@ -2117,9 +1860,8 @@ mod test {
 
         // transaction contains a delegation and also a transfer
         // transaction considered as non-emptying
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE + 1;
         let tx = make_test_delegation_tx(
-            gas_limit,
+            100_000_000,
             HALF_ETHER,
             0,
             S1,
@@ -2135,29 +1877,20 @@ mod test {
         let signer = tx.signer();
         let txs = BTreeMap::from([(4, vec![tx])]);
 
-        // balance of signer at block n-3
+        // balance of signer at block n-3 (sufficient balance)
         let state_backend = NopStateBackend {
-            balances: BTreeMap::from([(signer, U256::from(2 * RESERVE_BALANCE))]),
+            balances: BTreeMap::from([(signer, U256::from(100 * ONE_ETHER))]),
             ..Default::default()
         };
 
-        // although the signer has sufficient balance, as the transaction is considered reserve balance
-        // gas cost that exceeds reserve balance is rejected
         let result = setup_block_policy_with_txs(
             txs,
             vec![signer],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
-        assert_eq!(
-            result,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            )),
-            "Block coherency check should have failed: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
         /////////////////////////////////////////////////////////////////////////////
         // Case10: Delegation with invalid chain id, non emptying transaction     ///
@@ -2180,8 +1913,7 @@ mod test {
                 },
             )]),
         );
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE + 1;
-        let tx2 = make_test_tx(gas_limit, HALF_ETHER, 1, S2);
+        let tx2 = make_test_tx(100_000_000, HALF_ETHER, 1, S2);
 
         let signer1 = tx1.signer();
         let signer2 = tx2.signer();
@@ -2192,7 +1924,7 @@ mod test {
         let state_backend = NopStateBackend {
             balances: BTreeMap::from([
                 (signer1, U256::from(gas_cost)),
-                (signer2, U256::from(2 * RESERVE_BALANCE)),
+                (signer2, U256::from(100 * ONE_ETHER)),
             ]),
             ..Default::default()
         };
@@ -2202,16 +1934,9 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
-        assert_eq!(
-            result,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            )),
-            "Block coherency check should have failed: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
 
         /////////////////////////////////////////////////////////////////////////////
         // Case11: Delegation then multi block transactions                       ///
@@ -2232,21 +1957,21 @@ mod test {
                 },
             )]),
         );
-        // second tx is non-emptying transaction (gas cost of full reserve balance)
-        let gas_limit = RESERVE_BALANCE as u64 / BASE_FEE;
-        let tx2 = make_test_tx(gas_limit, 0, 1, S1);
-        // third tx is non emptying transaction (gas cost exceeds reserve balance)
+        // second tx is non-emptying transaction with high gas
+        let tx2 = make_test_tx(100_000_000, 0, 1, S1);
+        // third tx is non emptying transaction that exceeds remaining balance
         let tx3 = make_test_tx(50000, 0, 2, S1);
 
         let signer1 = tx2.signer();
         let signer2 = tx1.signer();
         let txs = BTreeMap::from([(3, vec![tx1.clone(), tx2]), (4, vec![tx3])]);
 
-        // balance of signer at block n-3
+        // balance of signer at block n-3 (just enough for tx2 gas but not tx3)
+        let tx2_gas_cost = 100_000_000 * BASE_FEE as u128;
         let gas_cost = 50000 * BASE_FEE as u128;
         let state_backend = NopStateBackend {
             balances: BTreeMap::from([
-                (signer1, U256::from(2 * RESERVE_BALANCE)),
+                (signer1, U256::from(tx2_gas_cost)),
                 (signer2, U256::from(gas_cost)),
             ]),
             ..Default::default()
@@ -2257,12 +1982,12 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert_eq!(
             result,
             Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                BlockPolicyBlockValidatorError::InsufficientBalance
             )),
             "Block coherency check should have failed: {:?}",
             result
@@ -2290,7 +2015,7 @@ mod test {
             vec![signer1, signer2],
             &state_backend,
             num_committed_blocks,
-            CoherencyCheckMode::ReserveBalanceCoherency,
+            CoherencyCheckMode::BalanceCoherency,
         );
         assert!(result.is_ok(), "Block coherency check failed: {:?}", result);
     }
@@ -2511,14 +2236,8 @@ mod test {
 
     #[test]
     fn test_compute_account_balance_state() {
-        // setup test addresses
         let address1 = Address(FixedBytes([0x11; 20]));
-        let address2 = Address(FixedBytes([0x22; 20]));
-        let address3 = Address(FixedBytes([0x33; 20]));
 
-        let max_reserve_balance = Balance::from(RESERVE_BALANCE);
-
-        // add committed blocks to buffer
         let mut buffer = CommittedBlkBuffer::<
             SignatureType,
             SignatureCollectionType,
@@ -2532,196 +2251,31 @@ mod test {
             seq_num: SeqNum(1),
             timestamp_ns: 1,
             nonce_usages: NonceUsageMap {
-                map: BTreeMap::from([
-                    (address1, NonceUsage::Known(1)),
-                    (address2, NonceUsage::Known(1)),
-                ]),
-            },
-            fees: BlockTxnFeeStates {
-                txn_fees: BTreeMap::from([
-                    (
-                        address1,
-                        TxnFee {
-                            first_txn_value: Balance::from(100),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(90),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                    (
-                        address2,
-                        TxnFee {
-                            first_txn_value: Balance::from(200),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(190),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                ]),
+                map: BTreeMap::from([(address1, NonceUsage::Known(1))]),
             },
             base_fee: BASE_FEE,
             base_fee_trend: BASE_FEE_TREND,
             base_fee_moment: BASE_FEE_MOMENT,
-            block_gas_usage: 0, // not used in this test
-        };
-
-        let block2 = CommittedBlock {
-            block_id: BlockId(Hash(Default::default())),
-            round: Round(0),
-            epoch: Epoch(1),
-            timestamp_ns: 1,
-            seq_num: SeqNum(2),
-            nonce_usages: NonceUsageMap {
-                map: BTreeMap::from([
-                    (address1, NonceUsage::Known(2)),
-                    (address3, NonceUsage::Known(1)),
-                ]),
-            },
-            fees: BlockTxnFeeStates {
-                txn_fees: BTreeMap::from([
-                    (
-                        address1,
-                        TxnFee {
-                            first_txn_value: Balance::from(150),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(140),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                    (
-                        address3,
-                        TxnFee {
-                            first_txn_value: Balance::from(300),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(290),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                ]),
-            },
-            base_fee: BASE_FEE,
-            base_fee_trend: BASE_FEE_TREND,
-            base_fee_moment: BASE_FEE_MOMENT,
-            block_gas_usage: 0, // not used in this test
-        };
-
-        let block3 = CommittedBlock {
-            block_id: BlockId(Hash(Default::default())),
-            round: Round(0),
-            epoch: Epoch(1),
-            seq_num: SeqNum(3),
-            timestamp_ns: 1,
-            nonce_usages: NonceUsageMap {
-                map: BTreeMap::from([
-                    (address2, NonceUsage::Known(2)),
-                    (address3, NonceUsage::Known(2)),
-                ]),
-            },
-            fees: BlockTxnFeeStates {
-                txn_fees: BTreeMap::from([
-                    (
-                        address2,
-                        TxnFee {
-                            first_txn_value: Balance::from(250),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(240),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                    (
-                        address3,
-                        TxnFee {
-                            first_txn_value: Balance::from(350),
-                            first_txn_gas: Balance::from(10),
-                            max_gas_cost: Balance::from(0),
-                            is_delegated: false,
-                            delegation_before_first_txn: false,
-                        },
-                    ),
-                ]),
-            },
-            base_fee: BASE_FEE,
-            base_fee_trend: BASE_FEE_TREND,
-            base_fee_moment: BASE_FEE_MOMENT,
-            block_gas_usage: 0, // not used in this test
+            block_gas_usage: 0,
         };
 
         buffer.blocks.insert(SeqNum(1), block1);
-        buffer.blocks.insert(SeqNum(2), block2);
-        buffer.blocks.insert(SeqNum(3), block3);
 
-        // committed blocks are out of range for emptying and reserve balance check
         let mut account_balance_address_1 = AccountBalanceState {
             balance: Balance::from(250),
             block_seqnum_of_latest_txn: GENESIS_SEQ_NUM,
-            remaining_reserve_balance: Balance::from(250),
-            max_reserve_balance,
             is_delegated: false,
         };
         let res = buffer.update_account_balance(
             &mut account_balance_address_1,
             &address1,
             EXEC_DELAY,
-            SeqNum(4)..SeqNum(5),
-            SeqNum(5)..,
+            SeqNum(2)..SeqNum(3),
+            SeqNum(3)..,
             &MockChainConfig::DEFAULT,
         );
         assert!(res.is_ok());
-
-        let emptying_txn_check_block_range = SeqNum(2)..SeqNum(3);
-        let reserve_balance_check_block_range = SeqNum(3)..;
-
-        let mut account_balance_address_2 = AccountBalanceState {
-            balance: Balance::from(250),
-            block_seqnum_of_latest_txn: GENESIS_SEQ_NUM,
-            remaining_reserve_balance: Balance::from(250),
-            max_reserve_balance,
-            is_delegated: false,
-        };
-        let res = buffer.update_account_balance(
-            &mut account_balance_address_2,
-            &address2,
-            EXEC_DELAY,
-            emptying_txn_check_block_range.clone(),
-            reserve_balance_check_block_range.clone(),
-            &MockChainConfig::DEFAULT,
-        );
-        // no transaction in block2 (emptying transaction check)
-        // gas cost + value more than balance in block3 (reserve balance check)
-        assert_eq!(
-            res,
-            Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                BlockPolicyBlockValidatorError::InsufficientReserveBalance
-            ))
-        );
-
-        let mut account_balance_address_3 = AccountBalanceState {
-            balance: Balance::from(250),
-            block_seqnum_of_latest_txn: GENESIS_SEQ_NUM,
-            remaining_reserve_balance: Balance::from(250),
-            max_reserve_balance,
-            is_delegated: false,
-        };
-        let res = buffer.update_account_balance(
-            &mut account_balance_address_3,
-            &address3,
-            EXEC_DELAY,
-            emptying_txn_check_block_range,
-            reserve_balance_check_block_range,
-            &MockChainConfig::DEFAULT,
-        );
-        // has a transaction in block2 (emptying transaction check)
-        // gas cost more than balance in block3 (reserve balance check)
-        assert!(res.is_ok());
-        assert_eq!(
-            account_balance_address_3.remaining_reserve_balance,
-            Balance::from(240)
-        );
+        assert_eq!(account_balance_address_1.balance, Balance::from(250));
     }
 
     proptest! {
@@ -2758,7 +2312,6 @@ mod test {
 
     #[test]
     fn test_validate_emptying_txn() {
-        let reserve_balance = Balance::from(RESERVE_BALANCE);
         let latest_seq_num = SeqNum(1000);
         let txn_value = 1000;
         let block_seq_num = latest_seq_num + EXEC_DELAY;
@@ -2774,9 +2327,7 @@ mod test {
             &signer,
             AccountBalanceState {
                 balance: min_balance,
-                remaining_reserve_balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2800,9 +2351,7 @@ mod test {
             &signer,
             AccountBalanceState {
                 balance: min_balance - Balance::from(1),
-                remaining_reserve_balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2827,7 +2376,6 @@ mod test {
 
     #[test]
     fn test_validate_non_emptying_txn() {
-        let reserve_balance = Balance::from(RESERVE_BALANCE);
         let latest_seq_num = SeqNum(1000);
         let txn_value = 1000;
         let block_seq_num = latest_seq_num + EXEC_DELAY - SeqNum(1);
@@ -2843,9 +2391,7 @@ mod test {
             &signer,
             AccountBalanceState {
                 balance: min_balance,
-                remaining_reserve_balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2868,10 +2414,8 @@ mod test {
         account_balances.insert(
             &signer,
             AccountBalanceState {
-                balance: min_balance,
-                remaining_reserve_balance: min_balance - Balance::from(1),
+                balance: min_balance - Balance::from(1),
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2888,7 +2432,7 @@ mod test {
             assert!(
                 validator.try_add_transaction(&mut account_balances, txn)
                     == Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-                        BlockPolicyBlockValidatorError::InsufficientReserveBalance
+                        BlockPolicyBlockValidatorError::InsufficientBalance
                     ))
             );
         }
@@ -2896,7 +2440,6 @@ mod test {
 
     #[test]
     fn test_missing_balance() {
-        let reserve_balance = Balance::from(RESERVE_BALANCE);
         let latest_seq_num = SeqNum(1000);
         let txn_value = 1000;
         let block_seq_num = latest_seq_num + EXEC_DELAY;
@@ -2913,9 +2456,7 @@ mod test {
             &address,
             AccountBalanceState {
                 balance: min_balance,
-                remaining_reserve_balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2939,8 +2480,7 @@ mod test {
     }
 
     #[test]
-    fn test_validator_inconsistency() {
-        let reserve_balance = Balance::from(RESERVE_BALANCE);
+    fn test_validator_emptying_with_sufficient_balance() {
         let latest_seq_num = SeqNum(1000);
         let txn_value = 1000;
         let block_seq_num = latest_seq_num + EXEC_DELAY;
@@ -2951,15 +2491,12 @@ mod test {
         let signer = tx.recover_signer().unwrap();
         let min_balance = compute_txn_max_value(&tx, BASE_FEE);
 
-        // Empty reserve balance
         let mut account_balances: BTreeMap<&Address, AccountBalanceState> = BTreeMap::new();
         account_balances.insert(
             &signer,
             AccountBalanceState {
                 balance: min_balance,
-                remaining_reserve_balance: Balance::ZERO,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -2978,17 +2515,15 @@ mod test {
                 .is_ok());
         }
 
-        // Overdraft
+        // Non-emptying with sufficient balance
         let block_seq_num = latest_seq_num;
-        let min_reserve = compute_txn_max_gas_cost(&tx, BASE_FEE);
+        let min_balance = compute_txn_max_gas_cost(&tx, BASE_FEE);
         let mut account_balances: BTreeMap<&Address, AccountBalanceState> = BTreeMap::new();
         account_balances.insert(
             &signer,
             AccountBalanceState {
-                balance: Balance::ZERO,
-                remaining_reserve_balance: min_reserve,
+                balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -3010,7 +2545,6 @@ mod test {
 
     #[test]
     fn test_validate_many_txn() {
-        let reserve_balance = Balance::from(RESERVE_BALANCE);
         let latest_seq_num = SeqNum(1000);
         let txn_value = 1000;
         let block_seq_num = latest_seq_num + EXEC_DELAY;
@@ -3025,14 +2559,13 @@ mod test {
         let min_balance =
             compute_txn_max_value(&tx1, BASE_FEE) + compute_txn_max_gas_cost(&tx2, BASE_FEE);
 
+        // emptying case: first tx is emptying, second is not
         let mut account_balances: BTreeMap<&Address, AccountBalanceState> = BTreeMap::new();
         account_balances.insert(
             &signer,
             AccountBalanceState {
                 balance: min_balance,
-                remaining_reserve_balance: Balance::ZERO,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -3051,17 +2584,16 @@ mod test {
                 .is_ok());
         }
 
-        let min_reserve =
+        // non-emptying case: both txns use gas from balance
+        let min_balance =
             compute_txn_max_gas_cost(&tx1, BASE_FEE) + compute_txn_max_gas_cost(&tx2, BASE_FEE);
 
         let mut account_balances: BTreeMap<&Address, AccountBalanceState> = BTreeMap::new();
         account_balances.insert(
             &signer,
             AccountBalanceState {
-                balance: Balance::ZERO,
-                remaining_reserve_balance: min_reserve,
+                balance: min_balance,
                 block_seqnum_of_latest_txn: latest_seq_num,
-                max_reserve_balance: reserve_balance,
                 is_delegated: false,
             },
         );
@@ -3081,52 +2613,24 @@ mod test {
         }
     }
 
-    const RESERVE_FAIL: Result<(), BlockPolicyError> =
-        Err(BlockPolicyError::BlockPolicyBlockValidatorError(
-            BlockPolicyBlockValidatorError::InsufficientReserveBalance,
-        ));
-
     const BALANCE_FAIL: Result<(), BlockPolicyError> =
         Err(BlockPolicyError::BlockPolicyBlockValidatorError(
             BlockPolicyBlockValidatorError::InsufficientBalance,
         ));
 
     #[rstest]
-    #[case(Balance::from(100), Balance::from(10), Balance::from(10), SeqNum(3), 1_u128, 1_u64, Ok(()))]
-    #[case(Balance::from(5), Balance::from(10), Balance::from(10), SeqNum(3), 2_u128, 2_u64, Ok(()))]
-    #[case(Balance::from(5), Balance::from(5), Balance::from(5), SeqNum(3), 0_u128, 5_u64, Ok(()))]
-    #[case(
-        Balance::from(5),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(3),
-        7_u128,
-        2_u64,
-        Ok(())
-    )]
-    #[case(
-        Balance::from(100),
-        Balance::from(1),
-        Balance::from(1),
-        SeqNum(2),
-        3_u128,
-        2_u64,
-        RESERVE_FAIL
-    )]
+    // emptying (SeqNum(3), latest=0, diff=3 > EXEC_DELAY-1=2): balance >= gas, balance -= value+gas
+    #[case(Balance::from(100), SeqNum(3), 1_u128, 1_u64, Ok(()))]
+    #[case(Balance::from(5), SeqNum(3), 2_u128, 2_u64, Ok(()))]
+    #[case(Balance::from(5), SeqNum(3), 0_u128, 5_u64, Ok(()))]
+    #[case(Balance::from(5), SeqNum(3), 7_u128, 2_u64, Ok(()))]
+    // non-emptying (SeqNum(2), latest=0, diff=2 == EXEC_DELAY-1=2): check balance >= gas
+    #[case(Balance::from(1), SeqNum(2), 3_u128, 2_u64, BALANCE_FAIL)]
+    #[case(Balance::from(2), SeqNum(2), 3_u128, 2_u64, Ok(()))]
     // emptying txn case
-    #[case(
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(3),
-        100_u128,
-        100_u64,
-        Ok(())
-    )]
+    #[case(Balance::from(100), SeqNum(3), 100_u128, 100_u64, Ok(()))]
     fn test_txn_tfm(
         #[case] account_balance: Balance,
-        #[case] reserve_balance: Balance,
-        #[case] max_reserve_balance: Balance,
         #[case] block_seq_num: SeqNum,
         #[case] txn_value: u128,
         #[case] txn_gas_limit: u64,
@@ -3134,9 +2638,7 @@ mod test {
     ) {
         let abs = AccountBalanceState {
             balance: account_balance,
-            remaining_reserve_balance: reserve_balance,
             block_seqnum_of_latest_txn: SeqNum(0),
-            max_reserve_balance,
             is_delegated: false,
         };
 
@@ -3162,36 +2664,23 @@ mod test {
     }
 
     #[rstest]
+    // non-emptying txns, sufficient balance
     #[case(
         Balance::from(100),
-        Balance::from(5),
-        Balance::from(10),
-        vec![(4_u128, 2_u64), (4_u128, 2_u64), (4_u128, 2_u64)],
-        vec![SeqNum(1), SeqNum(2), SeqNum(3)],
-        vec![Ok(()), Ok(()), RESERVE_FAIL],
-    )]
-    #[case(
-        Balance::from(100),
-        Balance::from(6),
-        Balance::from(10),
         vec![(4_u128, 2_u64), (4_u128, 2_u64), (4_u128, 2_u64)],
         vec![SeqNum(1), SeqNum(2), SeqNum(3)],
         vec![Ok(()), Ok(()), Ok(())],
     )]
-    // attempt to empty, but other txns within k
+    // non-emptying, but other txns within k (no emptying)
     #[case(
         Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
         vec![(4_u128, 4_u64), (96_u128, 96_u64)],
         vec![SeqNum(1), SeqNum(3)],
-        vec![Ok(()), RESERVE_FAIL],
+        vec![Ok(()), Ok(())],
     )]
-    // successful attempt to empty because emptying is more than k
+    // successful emptying because gap > k
     #[case(
         Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
         vec![(4_u128, 4_u64), (96_u128, 0_u64)],
         vec![SeqNum(1), SeqNum(4)],
         vec![Ok(()), Ok(())],
@@ -3199,100 +2688,61 @@ mod test {
     // single emptying txn
     #[case(
         Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
         vec![(100_u128, 4_u64)],
         vec![SeqNum(4)],
         vec![Ok(())],
     )]
-    // Test transactions across multiple blocks with
-    // enough cooling period (k gap between txns)
-    // but reserve lower than fees
+    // emptying txns across multiple blocks
     #[case(
         Balance::from(100),
-        Balance::from(1),
-        Balance::from(1),
         vec![(3_u128, 2_u64), (3_u128, 2_u64)],
         vec![SeqNum(4), SeqNum(7)],
         vec![Ok(()), Ok(())],
     )]
-    // Test with low reserve balance
+    // emptying then non-emptying in same block
     #[case(
-        Balance::from(100),
-        Balance::from(1),
-        Balance::from(1),
+        Balance::from(10),
         vec![(3_u128, 2_u64), (3_u128, 2_u64)],
         vec![SeqNum(4), SeqNum(4)],
-        vec![Ok(()), RESERVE_FAIL],
+        vec![Ok(()), Ok(())],
     )]
-    // Test inclusion but will revert in execution
-    // first txn bring balance down to reserve (Ok)
-    // second tries to spend all (fails)
-    // third is allowed by consensus but expected to revert in execution
-    // because it tries to dip into reserve
+    // first txn empties balance, second fails
     #[case(
         Balance::from(1000),
-        Balance::from(10),
-        Balance::from(10),
         vec![(990_u128, 1_u64), (5_u128, 10_u64), (8_u128, 1_u64)],
         vec![SeqNum(4), SeqNum(5), SeqNum(6)],
-        vec![Ok(()), RESERVE_FAIL, Ok(())],
+        vec![Ok(()), BALANCE_FAIL, Ok(())],
     )]
-    // Zero value transfer test
-    // first txn is not potentially emptying
+    // non-emptying, balance exhausted
     #[case(
-        Balance::from(20),
-        Balance::from(10),
         Balance::from(10),
         vec![(0_u128, 5_u64), (0_u128, 5_u64), (0_u128, 5_u64)],
         vec![SeqNum(2), SeqNum(2), SeqNum(2)],
-        vec![Ok(()), Ok(()), RESERVE_FAIL],
+        vec![Ok(()), Ok(()), BALANCE_FAIL],
     )]
-    // Reserve boundary test
-    // first txn is not potentially emptying
+    // non-emptying, exact balance
     #[case(
-        Balance::from(100),
-        Balance::from(20),
-        Balance::from(20),
+        Balance::from(21),
         vec![(10_u128, 20_u64), (0_u128, 1_u64)],
         vec![SeqNum(2), SeqNum(2)],
-        vec![Ok(()), RESERVE_FAIL],
+        vec![Ok(()), Ok(())],
     )]
-    // Zero value transfer test
-    // first txn is potentially emptying
+    // emptying, then non-emptying
     #[case(
         Balance::from(20),
-        Balance::from(10),
-        Balance::from(10),
         vec![(0_u128, 5_u64), (0_u128, 5_u64), (0_u128, 5_u64)],
         vec![SeqNum(3), SeqNum(3), SeqNum(3)],
         vec![Ok(()), Ok(()), Ok(())],
     )]
-    // Reserve boundary test
-    // first txn is potentially emptying
+    // emptying then balance exhaustion
     #[case(
-        Balance::from(100),
-        Balance::from(20),
-        Balance::from(20),
-        vec![(10_u128, 20_u64), (0_u128, 1_u64)],
-        vec![SeqNum(3), SeqNum(3)],
-        vec![Ok(()), Ok(())],
-    )]
-    // Reserve boundary test with many txns
-    // first txn is potentially emptying
-    // the last txn in the list exceeds the reserve balance
-    #[case(
-        Balance::from(100),
-        Balance::from(20),
-        Balance::from(20),
+        Balance::from(40),
         vec![(10_u128, 20_u64), (0_u128, 1_u64), (0_u128, 18_u64), (0_u128, 1_u64), (0_u128, 1_u64)],
         vec![SeqNum(3), SeqNum(3), SeqNum(3), SeqNum(3), SeqNum(3)],
-        vec![Ok(()), Ok(()), Ok(()), Ok(()), RESERVE_FAIL],
+        vec![Ok(()), Ok(()), Ok(()), Ok(()), BALANCE_FAIL],
     )]
     fn test_multi_txn_tfm(
         #[case] account_balance: Balance,
-        #[case] reserve_balance: Balance,
-        #[case] max_reserve_balance: Balance,
         #[case] txns: Vec<(u128, u64)>, // txn (value, gas_limit)
         #[case] txn_block_num: Vec<SeqNum>,
         #[case] expected: Vec<Result<(), BlockPolicyError>>,
@@ -3300,8 +2750,6 @@ mod test {
         multi_txn_tfm_helper(
             false,
             account_balance,
-            reserve_balance,
-            max_reserve_balance,
             txns,
             txn_block_num,
             expected,
@@ -3309,29 +2757,22 @@ mod test {
     }
 
     #[rstest]
-    // attempt to exceed reserve after k blocks but will fail
-    // because delegated
+    // delegated, non-emptying, gas exceeds balance
     #[case(
-        Balance::from(100),
-        Balance::from(10),
         Balance::from(10),
         vec![(20_u128, 15_u64)],
         vec![SeqNum(3)],
-        vec![RESERVE_FAIL],
+        vec![BALANCE_FAIL],
     )]
-    // Reserve boundary test
+    // delegated, non-emptying, balance exhausted
     #[case(
-        Balance::from(100),
-        Balance::from(20),
-        Balance::from(20),
-        vec![(10_u128, 20_u64), (0_u128, 1_u64)],
+        Balance::from(21),
+        vec![(10_u128, 20_u64), (0_u128, 2_u64)],
         vec![SeqNum(3), SeqNum(3)],
-        vec![Ok(()), RESERVE_FAIL],
+        vec![Ok(()), BALANCE_FAIL],
     )]
     fn test_try_add_delegated_txns(
         #[case] account_balance: Balance,
-        #[case] reserve_balance: Balance,
-        #[case] max_reserve_balance: Balance,
         #[case] txns: Vec<(u128, u64)>, // txn (value, gas_limit)
         #[case] txn_block_num: Vec<SeqNum>,
         #[case] expected: Vec<Result<(), BlockPolicyError>>,
@@ -3339,8 +2780,6 @@ mod test {
         multi_txn_tfm_helper(
             true,
             account_balance,
-            reserve_balance,
-            max_reserve_balance,
             txns,
             txn_block_num,
             expected,
@@ -3350,8 +2789,6 @@ mod test {
     fn multi_txn_tfm_helper(
         is_delegated: bool,
         account_balance: Balance,
-        reserve_balance: Balance,
-        max_reserve_balance: Balance,
         txns: Vec<(u128, u64)>, // txn (value, gas_limit)
         txn_block_num: Vec<SeqNum>,
         expected: Vec<Result<(), BlockPolicyError>>,
@@ -3361,9 +2798,7 @@ mod test {
 
         let abs = AccountBalanceState {
             balance: account_balance,
-            remaining_reserve_balance: reserve_balance,
             block_seqnum_of_latest_txn: SeqNum(0),
-            max_reserve_balance,
             is_delegated,
         };
 
@@ -3416,147 +2851,6 @@ mod test {
         recover_tx(make_eip1559_tx_with_value(
             signer, value, 1_u128, 0, gas_limit, nonce, 0,
         ))
-    }
-
-    fn make_txn_fees(
-        first_txn_value: u64,
-        first_txn_gas: u64,
-        max_gas_cost: u64,
-        is_delegated: bool,
-        delegation_before_first_txn: bool,
-    ) -> TxnFee {
-        TxnFee {
-            first_txn_value: Balance::from(first_txn_value),
-            first_txn_gas: Balance::from(first_txn_gas),
-            max_gas_cost: Balance::from(max_gas_cost),
-            is_delegated,
-            delegation_before_first_txn,
-        }
-    }
-
-    fn apply_block_fees_helper(
-        block_seq_num: SeqNum,
-        account_balance: &mut AccountBalanceState,
-        fees: &TxnFee,
-        eth_address: &Address,
-        expected_remaining_reserve: Balance,
-        expected_is_delegated: bool,
-        expect: Result<(), BlockPolicyError>,
-    ) {
-        let validator = EthBlockPolicyBlockValidator::new(
-            block_seq_num,
-            EXEC_DELAY,
-            BASE_FEE,
-            &MockChainRevision::DEFAULT,
-        )
-        .unwrap();
-
-        assert_eq!(
-            validator.try_apply_block_fees(account_balance, fees, eth_address),
-            expect,
-        );
-        assert_eq!(
-            account_balance.remaining_reserve_balance,
-            expected_remaining_reserve
-        );
-        assert_eq!(account_balance.is_delegated, expected_is_delegated);
-    }
-
-    #[rstest]
-    #[case( // Has emptying txn, insufficient balance
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(1),
-        vec![(1001, 1, 100)], // value is not checked
-        vec![SeqNum(4)],
-        vec![Balance::ZERO],
-        vec![RESERVE_FAIL],
-    )]
-    #[case( // Has emptying txn, insufficient reserve
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(1),
-        vec![(100, 1, 100)],
-        vec![SeqNum(4)],
-        vec![Balance::ZERO],
-        vec![RESERVE_FAIL],
-    )]
-    #[case( // Has emptying txn, insufficient reserve
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(1),
-        vec![(90, 1, 4), (5, 1, 5)],
-        vec![SeqNum(4), SeqNum(5)],
-        vec![Balance::from(5), Balance::from(5)],
-        vec![Ok(()), RESERVE_FAIL],
-    )]
-    #[case( // Has emptying txn, pass 
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(1),
-        vec![(90, 1, 4), (5, 1, 4)],
-        vec![SeqNum(4), SeqNum(5)],
-        vec![Balance::from(5), Balance::from(0)],
-        vec![Ok(()), Ok(())],
-    )]
-    #[case( // reserve balance fail
-        Balance::from(100),
-        Balance::from(10),
-        Balance::from(10),
-        SeqNum(0),
-        vec![(50, 1, 9), (0, 0, 0), (500, 1, 1)],
-        vec![SeqNum(1), SeqNum(2), SeqNum(3)],
-        vec![Balance::from(0), Balance::from(0)],
-        vec![Ok(()), Ok(()), RESERVE_FAIL],
-    )]
-    fn test_try_apply_block_fees(
-        #[case] account_balance: Balance,
-        #[case] reserve_balance: Balance,
-        #[case] max_reserve_balance: Balance,
-        #[case] block_seqnum_of_latest_txn: SeqNum,
-        #[case] blk_fees: Vec<(u64, u64, u64)>, // (first_txn_value, first_txn_gas, max_gas_cost)
-        #[case] txn_block_num: Vec<SeqNum>,
-        #[case] expected_remaining_reserve: Vec<Balance>,
-        #[case] expected: Vec<Result<(), BlockPolicyError>>,
-    ) {
-        assert_eq!(blk_fees.len(), expected.len());
-        assert_eq!(blk_fees.len(), txn_block_num.len());
-
-        let address = Address(FixedBytes([0x11; 20]));
-
-        let mut account_balance = AccountBalanceState {
-            balance: account_balance,
-            remaining_reserve_balance: reserve_balance,
-            block_seqnum_of_latest_txn,
-            max_reserve_balance,
-            is_delegated: false,
-        };
-
-        let blk_fees = blk_fees
-            .into_iter()
-            .map(|x| make_txn_fees(x.0, x.1, x.2, false, false))
-            .collect_vec();
-
-        for (((fees, expect), seqnum), expected_remaining_reserve) in blk_fees
-            .into_iter()
-            .zip(expected)
-            .zip(txn_block_num)
-            .zip(expected_remaining_reserve)
-        {
-            apply_block_fees_helper(
-                seqnum,
-                &mut account_balance,
-                &fees,
-                &address,
-                expected_remaining_reserve,
-                false,
-                expect,
-            );
-        }
     }
 
     #[test]
@@ -3662,134 +2956,6 @@ mod test {
 
             assert_eq!(s2, &secret_to_eth_address(S2));
             assert_eq!(s2_nonce, 0);
-        }
-    }
-
-    #[rstest]
-    #[case( // Has emptying txn, no auth in fly
-        Balance::from(1),
-        Balance::from(10),
-        SeqNum(1),
-        false,
-        vec![(11, 1, 1, false, false)],
-        vec![SeqNum(4)],
-        vec![Balance::from(0_u64)],
-        vec![false],
-        vec![RESERVE_FAIL],
-    )]
-    #[case( // Has emptying txn, auth in fly
-        Balance::from(1),
-        Balance::from(10),
-        SeqNum(1),
-        true,
-        vec![(11, 1, 1, false, false)],
-        vec![SeqNum(4)],
-        vec![Balance::from(8_u64)],
-        vec![true],
-        vec![Ok(())],
-    )]
-    #[case( // delegated in initial state, auth
-        Balance::from(100),
-        Balance::from(10),
-        SeqNum(1),
-        true,
-        vec![(11, 1, 1, true, false)],
-        vec![SeqNum(4)],
-        vec![Balance::from(8_u64)],
-        vec![true],
-        vec![Ok(())],
-    )]
-    #[case( // delegated in initial state, no auth
-        Balance::from(100),
-        Balance::from(10),
-        SeqNum(1),
-        true,
-        vec![(11, 1, 1, false, false)],
-        vec![SeqNum(4)],
-        vec![Balance::from(8_u64)],
-        vec![true],
-        vec![Ok(())],
-    )]
-    #[case( // delegated in initial state, auth
-        Balance::from(100),
-        Balance::from(10),
-        SeqNum(1),
-        false,
-        vec![(11, 1, 10, true, false), (11, 1, 1, false, false)],
-        vec![SeqNum(4), SeqNum(5)],
-        vec![Balance::from(78_u64), Balance::from(76_u64)],
-        vec![true, true],
-        vec![Ok(()), Ok(())],
-    )]
-    #[case( // delegated in initial state, auth
-        Balance::from(1),
-        Balance::from(10),
-        SeqNum(1),
-        false,
-        vec![(11, 1, 2, true, false), (11, 1, 1, false, false), (4, 2, 0, false, false)],
-        vec![SeqNum(1), SeqNum(2), SeqNum(5)],
-        vec![Balance::from(7_u64), Balance::from(5_u64), Balance::from(3_u64)],
-        vec![true, true, true],
-        vec![Ok(()), Ok(()), Ok(())],
-    )]
-    #[case( // delegated in initial state, auth
-        Balance::from(1),
-        Balance::from(10),
-        SeqNum(1),
-        false,
-        vec![(11, 1, 2, false, false), (11, 1, 1, false, false), (4, 2, 0, false, false)],
-        vec![SeqNum(1), SeqNum(2), SeqNum(5)],
-        vec![Balance::from(7_u64), Balance::from(5_u64), Balance::from(5_u64)],
-        vec![false, false, false],
-        vec![Ok(()), Ok(()), BALANCE_FAIL],
-    )]
-
-    fn test_compute_delegation(
-        #[case] account_balance: Balance,
-        #[case] reserve_balance: Balance,
-        #[case] block_seqnum_of_latest_txn: SeqNum,
-        #[case] is_delegated: bool,
-        #[case] blk_fees: Vec<(u64, u64, u64, bool, bool)>, // (first_txn_value, first_txn_gas, max_gas_cost, is_delegated, delegation_before_first_txn)
-        #[case] txn_block_num: Vec<SeqNum>,
-        #[case] expected_remaining_reserve: Vec<Balance>,
-        #[case] expected_is_delegated: Vec<bool>,
-        #[case] expected: Vec<Result<(), BlockPolicyError>>,
-    ) {
-        assert_eq!(blk_fees.len(), expected.len());
-        assert_eq!(blk_fees.len(), txn_block_num.len());
-
-        let address = Address(FixedBytes([0x11; 20]));
-
-        let mut account_balance = AccountBalanceState {
-            balance: account_balance,
-            remaining_reserve_balance: reserve_balance,
-            max_reserve_balance: Balance::ZERO, // unused
-            block_seqnum_of_latest_txn,
-            is_delegated,
-        };
-
-        let blk_fees = blk_fees
-            .into_iter()
-            .map(|x| make_txn_fees(x.0, x.1, x.2, x.3, x.4))
-            .collect_vec();
-
-        for ((((fees, expect), seqnum), expected_remaining_reserve), expected_is_delegated) in
-            blk_fees
-                .into_iter()
-                .zip(expected)
-                .zip(txn_block_num)
-                .zip(expected_remaining_reserve)
-                .zip(expected_is_delegated)
-        {
-            apply_block_fees_helper(
-                seqnum,
-                &mut account_balance,
-                &fees,
-                &address,
-                expected_remaining_reserve,
-                expected_is_delegated,
-                expect,
-            );
         }
     }
 

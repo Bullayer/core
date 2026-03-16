@@ -298,18 +298,14 @@ impl From<StateBackendError> for BlockPolicyError {
 #[derive(Debug, Clone)]
 pub struct AccountBalanceState {
     pub balance: Balance,
-    pub remaining_reserve_balance: Balance,
-    pub max_reserve_balance: Balance,
     pub block_seqnum_of_latest_txn: SeqNum,
     pub is_delegated: bool,
 }
 
 impl AccountBalanceState {
-    pub fn new(max_reserve_balance: Balance) -> Self {
+    pub fn new() -> Self {
         AccountBalanceState {
             balance: Balance::ZERO,
-            remaining_reserve_balance: Balance::ZERO,
-            max_reserve_balance,
             block_seqnum_of_latest_txn: GENESIS_SEQ_NUM,
             is_delegated: false,
         }
@@ -322,19 +318,7 @@ pub type AccountBalanceStates = BTreeMap<Address, AccountBalanceState>;
 pub enum BlockPolicyBlockValidatorError {
     AccountBalanceMissing,
     InsufficientBalance,
-    InsufficientReserveBalance,
 }
-
-#[derive(Debug, Default, Clone)]
-pub struct TxnFee {
-    pub first_txn_value: Balance,
-    pub first_txn_gas: Balance,
-    pub max_gas_cost: Balance,
-    pub is_delegated: bool,
-    pub delegation_before_first_txn: bool,
-}
-
-pub type TxnFees = BTreeMap<Address, TxnFee>;
 
 /// Trait that represents how inner contents of a block should be validated
 #[auto_impl(Box)]
