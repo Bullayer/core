@@ -214,7 +214,6 @@ impl FinalizedHeader for EthHeader {
 
 #[derive(Clone, PartialEq, Eq, RlpEncodable, RlpDecodable, Serialize, Deserialize, Default)]
 pub struct EthBlockBody {
-    // TODO consider storing recovered txs inline here
     pub transactions: LimitedVec<TxEnvelope, MAX_TRANSACTIONS_PER_BLOCK>,
     pub ommers: LimitedVec<Ommer, MAX_OMMERS>,
     pub withdrawals: LimitedVec<Withdrawal, MAX_WITHDRAWALS>,

@@ -34,8 +34,7 @@ use reqwest::{blocking::Client, Url};
 use tracing::{info, warn};
 use tracing_subscriber::{
     fmt::{format::FmtSpan, Layer as FmtLayer},
-    layer::SubscriberExt,
-    Layer,
+    layer::SubscriberExt
 };
 
 use crate::{cli::Cli, error::NodeSetupError};

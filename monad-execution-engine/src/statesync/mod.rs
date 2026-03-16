@@ -9,7 +9,7 @@ pub mod server;
 pub mod types;
 pub mod version;
 
-use crate::types::BlockHeader;
+use alloy_consensus::Header;
 
 use self::types::{SyncDone, SyncUpsertType};
 
@@ -26,7 +26,7 @@ pub trait StateSyncProvider: Send + Sync {
 /// Implemented by StateSyncClientContext, internally using StateSyncApplierDb.
 pub trait StateSyncApplier: Send + Sync {
     fn apply_upsert(&mut self, prefix: u64, upsert_type: SyncUpsertType, data: &[u8]) -> bool;
-    fn set_target(&mut self, target_header: &BlockHeader);
+    fn set_target(&mut self, target_header: &Header);
     fn handle_done(&mut self, done: SyncDone);
     fn has_reached_target(&self) -> bool;
     fn finalize(&mut self) -> bool;
@@ -48,7 +48,7 @@ pub trait StateSyncTraversable: Send + Sync {
 /// Bottom-level DB trait for client-side state writes (mock with in-memory).
 pub trait StateSyncApplierDb: Send + Sync {
     fn get_latest_version(&self) -> u64;
-    fn read_account(&self, addr: &[u8; 20]) -> Option<crate::types::Account>;
+    fn read_account(&self, addr: &[u8; 20]) -> Option<monad_eth_types::EthAccount>;
     fn read_storage(&self, addr: &[u8; 20], key: &[u8; 32]) -> [u8; 32];
     fn apply_batch(&mut self, updates: StateSyncBatch, version: u64);
     fn finalize_statesync(&mut self, target: u64) -> bool;
@@ -76,7 +76,7 @@ pub enum StateSyncError {
 
 #[derive(Debug, Clone, Default)]
 pub struct StateSyncBatch {
-    pub accounts: Vec<([u8; 20], Option<crate::types::Account>)>,
+    pub accounts: Vec<([u8; 20], Option<monad_eth_types::EthAccount>)>,
     pub storage: Vec<([u8; 20], [u8; 32], [u8; 32])>,
     pub code: Vec<([u8; 32], Vec<u8>)>,
 }

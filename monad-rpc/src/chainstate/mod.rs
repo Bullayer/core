@@ -953,7 +953,6 @@ fn receipt_envelope_to_logs_iter<'a>(
         | alloy_consensus::ReceiptEnvelope::Eip7702(receipt_with_bloom) => {
             receipt_with_bloom.receipt.logs
         }
-        _ => unreachable!(),
     };
 
     logs.into_iter().filter(|log: &Log| {

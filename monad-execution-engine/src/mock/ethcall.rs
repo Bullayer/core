@@ -2,14 +2,14 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::Address;
 use async_trait::async_trait;
+use monad_types::{BlockId, SeqNum};
 
 use crate::ethcall::{
     CallResult, EthCallHandler, MonadTracer, StateOverrideSet, SuccessCallResult,
 };
 
-/// Mock EthCallHandler: returns fixed results without executing EVM.
 pub struct MockEthCallHandler;
 
 impl MockEthCallHandler {
@@ -32,8 +32,8 @@ impl EthCallHandler for MockEthCallHandler {
         _transaction: Vec<u8>,
         _block_header: Vec<u8>,
         _sender: Address,
-        _block_number: u64,
-        _block_id: Option<B256>,
+        _seq_num: SeqNum,
+        _block_id: Option<BlockId>,
         _state_override_set: &StateOverrideSet,
         _tracer: MonadTracer,
         _gas_specified: bool,
@@ -49,10 +49,10 @@ impl EthCallHandler for MockEthCallHandler {
         &self,
         _chain_id: u64,
         _block_header: Vec<u8>,
-        _block_number: u64,
-        _block_id: Option<B256>,
-        _parent_id: Option<B256>,
-        _grandparent_id: Option<B256>,
+        _seq_num: SeqNum,
+        _block_id: Option<BlockId>,
+        _parent_id: Option<BlockId>,
+        _grandparent_id: Option<BlockId>,
         _transaction_index: i64,
         _tracer: MonadTracer,
     ) -> CallResult {

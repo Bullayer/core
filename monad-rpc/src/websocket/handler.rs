@@ -718,30 +718,30 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             for i in 1..=10u64 {
-                let block_id = alloy_primitives::B256::from([i as u8; 32]);
+                let block_id = monad_types::BlockId(monad_crypto::hasher::Hash([i as u8; 32]));
                 let parent_id = if i == 1 {
-                    alloy_primitives::B256::ZERO
+                    monad_types::GENESIS_BLOCK_ID
                 } else {
-                    alloy_primitives::B256::from([(i - 1) as u8; 32])
+                    monad_types::BlockId(monad_crypto::hasher::Hash([(i - 1) as u8; 32]))
                 };
 
-                let header = monad_execution_engine::types::BlockHeader {
+                let header = alloy_consensus::Header {
                     number: i,
                     timestamp: 1_700_000_000 + i,
                     gas_used: 21000 * i,
-                    parent_hash: parent_id,
+                    parent_hash: alloy_primitives::B256::from(parent_id.0.0),
                     ..Default::default()
                 };
 
                 if tx
                     .send(ExecutionEvent::BlockProposed {
-                        block_number: i,
+                        seq_num: monad_types::SeqNum(i),
                         block_id,
                         parent_id,
                         header,
                         transactions: vec![],
                         receipts: vec![],
-                        eth_block_hash: block_id,
+                        eth_block_hash: alloy_primitives::B256::from(block_id.0.0),
                     })
                     .is_err()
                 {
@@ -751,7 +751,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
                 let _ = tx.send(ExecutionEvent::BlockVoted {
-                    block_number: i,
+                    seq_num: monad_types::SeqNum(i),
                     block_id,
                 });
 

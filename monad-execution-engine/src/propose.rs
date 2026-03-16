@@ -1,79 +1,64 @@
 // Copyright (C) 2025 Category Labs, Inc.
 //
 // Licensed under the GNU General Public License v3.0.
-//
-// Complete rewrite of C++ propose_block (L174-378).
-// Closely mirrors the original with all validation steps.
 
-use alloy_primitives::B256;
+use monad_consensus_types::block::ConsensusFullBlock;
+use monad_crypto::certificate_signature::{CertificateSignaturePubKey, CertificateSignatureRecoverable};
+use monad_eth_types::EthExecutionProtocol;
+use monad_types::{SeqNum, GENESIS_BLOCK_ID};
+use monad_validator::signature_collection::SignatureCollection;
 
 use crate::block_hash::BlockHashChain;
 use crate::traits::{BlockExecutor, ExecutionDb, ExecutionError};
-use crate::types::{
-    Block, BlockCache, BlockExecOutput, ChainConfig, CodeMap,
-    ConsensusBody, ConsensusHeader, StateDeltas,
-};
+use crate::types::{Block, BlockExecOutput, CodeMap, StateDeltas};
 use crate::validation::{compute_block_hash, validate_live_execution_outputs};
 
-/// Validate consensus header fields.
-/// TT
-fn static_validate_consensus_header(header: &ConsensusHeader) -> Result<(), ExecutionError> {
-    if header.seqno == 0 {
-        return Err(ExecutionError::ValidationError("seqno must be > 0".to_string()));
+fn static_validate_consensus<ST, SCT>(
+    block: &ConsensusFullBlock<ST, SCT, EthExecutionProtocol>,
+) -> Result<(), ExecutionError>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
+    if block.get_seq_num() == SeqNum(0) {
+        return Err(ExecutionError::ValidationError("seq_num must be > 0".to_string()));
     }
     Ok(())
 }
 
-/// Validate chain-level header constraints.
-/// TT
-fn static_validate_header(
-    _chain: &ChainConfig,
-    header: &crate::types::BlockHeader,
-) -> Result<(), ExecutionError> {
-    if header.gas_limit == 0 {
-        return Err(ExecutionError::ValidationError("gas_limit must be > 0".to_string()));
-    }
-    Ok(())
-}
-
-/// Execute a proposed block: recover signatures, validate, execute, commit, verify output.
-pub fn propose_block(
-    block_id: B256,
-    consensus_header: &ConsensusHeader,
-    body: ConsensusBody,
+pub fn propose_block<ST, SCT>(
+    block: &ConsensusFullBlock<ST, SCT, EthExecutionProtocol>,
     block_hash_chain: &mut BlockHashChain,
-    chain: &ChainConfig,
     db: &mut dyn ExecutionDb,
     executor: &dyn BlockExecutor,
     is_first_block: bool,
-) -> Result<BlockExecOutput, ExecutionError> {
-    let block_hash_buffer = block_hash_chain.find_chain(&consensus_header.parent_id());
+) -> Result<BlockExecOutput, ExecutionError>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
+    let block_id = block.get_id();
+    let seq_num = block.get_seq_num();
+    let parent_id = block.get_parent_id();
 
-    static_validate_consensus_header(consensus_header)?;
-    static_validate_header(chain, &consensus_header.execution_inputs)?;
+    let block_hash_buffer = block_hash_chain.find_chain(&parent_id);
 
-    let mut header = consensus_header.execution_inputs.clone();
+    static_validate_consensus(block)?;
+    // static_validate_block
 
-    let parent_id = if is_first_block {
-        B256::ZERO
-    } else {
-        consensus_header.parent_id()
-    };
-    db.set_block_and_prefix(header.number - 1, parent_id);
+    let parent_block_id = if is_first_block { GENESIS_BLOCK_ID } else { parent_id };
+    db.set_block_and_prefix(seq_num - SeqNum(1), parent_block_id);
 
-    let parent_eth_header = db.read_eth_header();
-    header.parent_hash = compute_block_hash(&parent_eth_header);
-
-    let block = Block {
-        header,
-        transactions: body.transactions,
-        ommers: body.ommers,
-        withdrawals: body.withdrawals,
+    let body = &block.body().execution_body;
+    let eth_block = Block {
+        header: block.get_execution_inputs().clone(),
+        transactions: body.transactions.to_vec(),
+        ommers: body.ommers.to_vec(),
+        withdrawals: body.withdrawals.to_vec(),
     };
 
     let exec_output = executor.execute_block(
-        chain,
-        &block,
+        &eth_block,
         db,
         &block_hash_buffer,
     )?;
@@ -86,25 +71,26 @@ pub fn propose_block(
         &state_deltas,
         &code,
         &exec_output.receipts,
-        &block.transactions,
+        &eth_block.transactions,
     );
 
     let output_header = db.read_eth_header();
 
-    validate_live_execution_outputs(&block.header, &output_header)?;
+    validate_live_execution_outputs(&eth_block.header, &output_header)?;
 
     let eth_block_hash = compute_block_hash(&output_header);
+
     block_hash_chain.propose(
         eth_block_hash,
-        block.header.number,
+        seq_num,
         block_id,
-        consensus_header.parent_id(),
+        parent_id,
     );
 
     Ok(BlockExecOutput {
         eth_header: output_header,
         eth_block_hash,
-        transactions: block.transactions,
+        transactions: eth_block.transactions,
         receipts: exec_output.receipts,
     })
 }

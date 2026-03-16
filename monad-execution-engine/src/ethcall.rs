@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use async_trait::async_trait;
+use monad_types::{BlockId, SeqNum};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,8 +85,8 @@ pub trait EthCallHandler: Send + Sync {
         transaction: Vec<u8>,
         block_header: Vec<u8>,
         sender: Address,
-        block_number: u64,
-        block_id: Option<B256>,
+        seq_num: SeqNum,
+        block_id: Option<BlockId>,
         state_override_set: &StateOverrideSet,
         tracer: MonadTracer,
         gas_specified: bool,
@@ -95,10 +96,10 @@ pub trait EthCallHandler: Send + Sync {
         &self,
         chain_id: u64,
         block_header: Vec<u8>,
-        block_number: u64,
-        block_id: Option<B256>,
-        parent_id: Option<B256>,
-        grandparent_id: Option<B256>,
+        seq_num: SeqNum,
+        block_id: Option<BlockId>,
+        parent_id: Option<BlockId>,
+        grandparent_id: Option<BlockId>,
         transaction_index: i64,
         tracer: MonadTracer,
     ) -> CallResult;

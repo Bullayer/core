@@ -2,12 +2,15 @@
 //
 // Licensed under the GNU General Public License v3.0.
 //
-// Complete rewrite of C++ runloop_monad (L459-724).
 // Dual-queue mode: catch-up finalized blocks + real-time proposed blocks.
 
 use std::collections::VecDeque;
 
-use alloy_primitives::B256;
+use monad_consensus_types::block::ConsensusFullBlock;
+use monad_crypto::certificate_signature::{CertificateSignaturePubKey, CertificateSignatureRecoverable};
+use monad_eth_types::EthExecutionProtocol;
+use monad_types::{BlockId, FinalizedHeader, SeqNum};
+use monad_validator::signature_collection::SignatureCollection;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::block_hash::{BlockHashBufferFinalized, BlockHashChain};
@@ -15,46 +18,45 @@ use crate::command::ExecutionCommand;
 use crate::events::ExecutionEvent;
 use crate::propose::propose_block;
 use crate::traits::{BlockExecutor, ExecutionDb};
-use crate::types::{ChainConfig, ConsensusBody, ConsensusHeader};
 use crate::validation::validate_delayed_execution_results;
 
-struct ToExecute {
-    block_id: B256,
-    header: ConsensusHeader,
-    body: ConsensusBody,
+struct ToExecute<ST, SCT>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
+    block_id: BlockId,
+    block: ConsensusFullBlock<ST, SCT, EthExecutionProtocol>,
 }
 
 struct ToFinalize {
-    block_number: u64,
-    block_id: B256,
-    verified_blocks: Vec<u64>,
+    seq_num: SeqNum,
+    block_id: BlockId,
+    verified_blocks: Vec<SeqNum>,
 }
 
-/// Main execution runloop.
-/// Receives ExecutionCommands via channel, classifies them into to_execute/to_finalize queues,
-/// and processes them in order.
-pub async fn runloop_monad(
-    chain: ChainConfig,
+pub async fn runloop_monad<ST, SCT>(
     mut db: Box<dyn ExecutionDb>,
     executor: Box<dyn BlockExecutor>,
-    mut cmd_rx: mpsc::Receiver<ExecutionCommand>,
+    mut cmd_rx: mpsc::UnboundedReceiver<ExecutionCommand<ST, SCT>>,
     event_tx: broadcast::Sender<ExecutionEvent>,
-) {
+)
+where
+    ST: CertificateSignatureRecoverable + 'static,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>> + 'static,
+{
     let finalized_n = db.get_latest_finalized_version();
 
     let mut block_hash_buffer = BlockHashBufferFinalized::new();
-    if finalized_n != u64::MAX && finalized_n > 0 {
+    if finalized_n != SeqNum::MAX && finalized_n > SeqNum(0) {
         block_hash_buffer.init_from_db(&*db, finalized_n);
     }
     let mut block_hash_chain = BlockHashChain::new(block_hash_buffer);
 
-    let start_block_num = if finalized_n == u64::MAX {
-        0
-    } else {
-        finalized_n
-    };
+    let start_seq_num = if finalized_n == SeqNum::MAX { SeqNum(0) } else { finalized_n };
+    let mut last_finalized_seq_num = start_seq_num;
 
-    let mut to_execute: VecDeque<ToExecute> = VecDeque::new();
+    let mut to_execute: VecDeque<ToExecute<ST, SCT>> = VecDeque::new();
     let mut to_finalize: VecDeque<ToFinalize> = VecDeque::new();
 
     loop {
@@ -83,41 +85,45 @@ pub async fn runloop_monad(
         }
 
         for item in to_execute.drain(..) {
-            let block_number = item.header.execution_inputs.number;
+            let seq_num = item.block.get_seq_num();
+            let parent_id = item.block.get_parent_id();
 
-            db.update_voted_metadata(item.header.seqno - 1, item.header.parent_id());
+            db.update_voted_metadata(seq_num - SeqNum(1), parent_id);
 
-            let block_hash_buffer_ref = block_hash_chain.find_chain(&item.header.parent_id());
-            let valid = validate_delayed_execution_results(
+            let voted_seq = seq_num - SeqNum(1);
+            if voted_seq > last_finalized_seq_num && voted_seq != SeqNum::MAX {
+                let _ = event_tx.send(ExecutionEvent::BlockVoted {
+                    seq_num: voted_seq,
+                    block_id: parent_id,
+                });
+            }
+
+            let block_hash_buffer_ref = block_hash_chain.find_chain(&parent_id);
+            if !validate_delayed_execution_results(
                 &block_hash_buffer_ref,
-                &item.header.delayed_execution_results,
-            );
-            if !valid {
+                item.block.get_execution_results()
+            ) {
                 tracing::error!(
-                    block_number,
+                    seq_num = seq_num.0,
                     "delayed execution results validation failed, skipping block"
                 );
                 continue;
             }
 
-            let is_first_block = block_number == start_block_num;
             match propose_block(
-                item.block_id,
-                &item.header,
-                item.body,
+                &item.block,
                 &mut block_hash_chain,
-                &chain,
                 &mut *db,
                 &*executor,
-                is_first_block,
+                seq_num == start_seq_num,
             ) {
                 Ok(output) => {
-                    db.update_proposed_metadata(item.header.seqno, item.block_id);
+                    db.update_proposed_metadata(seq_num, item.block_id);
 
                     let _ = event_tx.send(ExecutionEvent::BlockProposed {
-                        block_number,
+                        seq_num,
                         block_id: item.block_id,
-                        parent_id: item.header.parent_id(),
+                        parent_id,
                         header: output.eth_header.clone(),
                         transactions: output.transactions,
                         receipts: output.receipts,
@@ -125,16 +131,16 @@ pub async fn runloop_monad(
                     });
 
                     tracing::info!(
-                        block_number,
-                        block_id = %item.block_id,
+                        seq_num = seq_num.0,
+                        block_id = ?item.block_id,
                         gas_used = output.eth_header.gas_used,
                         "block executed successfully"
                     );
                 }
                 Err(e) => {
                     tracing::error!(
-                        block_number,
-                        block_id = %item.block_id,
+                        seq_num = seq_num.0,
+                        block_id = ?item.block_id,
                         error = %e,
                         "block execution failed, terminating runloop"
                     );
@@ -145,23 +151,24 @@ pub async fn runloop_monad(
 
         for item in to_finalize.drain(..) {
             tracing::info!(
-                block_number = item.block_number,
-                block_id = %item.block_id,
+                seq_num = item.seq_num.0,
+                block_id = ?item.block_id,
                 "processing finalization"
             );
-            db.finalize(item.block_number, item.block_id);
+            db.finalize(item.seq_num, item.block_id);
             block_hash_chain.finalize(item.block_id);
+            last_finalized_seq_num = item.seq_num;
 
             let _ = event_tx.send(ExecutionEvent::BlockFinalized {
-                block_number: item.block_number,
+                seq_num: item.seq_num,
                 block_id: item.block_id,
             });
 
             if let Some(&last_verified) = item.verified_blocks.last() {
-                if last_verified != u64::MAX {
+                if last_verified != SeqNum::MAX {
                     db.update_verified_block(last_verified);
                     let _ = event_tx.send(ExecutionEvent::BlockVerified {
-                        block_number: last_verified,
+                        seq_num: last_verified,
                     });
                 }
             }
@@ -171,46 +178,46 @@ pub async fn runloop_monad(
     tracing::warn!("runloop exiting");
 }
 
-fn classify_command(
-    cmd: ExecutionCommand,
+fn classify_command<ST, SCT>(
+    cmd: ExecutionCommand<ST, SCT>,
     db: &dyn ExecutionDb,
-    to_execute: &mut VecDeque<ToExecute>,
+    to_execute: &mut VecDeque<ToExecute<ST, SCT>>,
     to_finalize: &mut VecDeque<ToFinalize>,
-) {
+)
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
     match cmd {
         ExecutionCommand::Propose {
             block_id,
-            header,
-            body,
+            block,
         } => {
-            if !db.has_executed(&block_id, header.seqno) {
+            if !db.has_executed(&block_id, block.get_seq_num()) {
                 to_execute.push_back(ToExecute {
                     block_id,
-                    header,
-                    body,
+                    block,
                 });
             }
-        }
-        ExecutionCommand::Vote {
-            block_number,
-            block_id,
-        } => {
-            to_finalize.push_back(ToFinalize {
-                block_number,
-                block_id,
-                verified_blocks: Vec::new(),
-            });
+            // block.get_seq_num() = last_finalized_seq_num + 1
         }
         ExecutionCommand::Finalize {
-            block_number,
+            seq_num,
             block_id,
-            verified_blocks,
+            block,
         } => {
             to_finalize.push_back(ToFinalize {
-                block_number,
+                seq_num,
                 block_id,
-                verified_blocks,
+                verified_blocks: block.get_execution_results().iter()
+                    .map(|h| h.seq_num()).collect(),
             });
+            if !db.has_executed(&block_id, seq_num) {
+                to_execute.push_back(ToExecute {
+                    block_id,
+                    block,
+                });
+            }
         }
         ExecutionCommand::Shutdown => {}
     }

@@ -2,19 +2,20 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
+use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
 use alloy_primitives::{Address, B256};
+use monad_types::{BlockId, SeqNum};
+
+use monad_eth_types::EthAccount;
 
 use crate::types::{
-    Account, Block, BlockExecOutput, BlockHeader, ChainConfig, CodeMap, Receipt, StateDeltas,
-    Transaction,
+    Block, BlockExecOutput, CodeMap, StateDeltas,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error("block validation error: {0}")]
     ValidationError(String),
-    #[error("missing sender for transaction {0}")]
-    MissingSender(usize),
     #[error("wrong ommers hash")]
     WrongOmmersHash,
     #[error("wrong merkle root")]
@@ -28,41 +29,38 @@ pub enum ExecutionError {
 }
 
 pub trait BlockHashBuffer: Send + Sync {
-    fn get(&self, block_number: u64) -> B256;
+    fn get(&self, seq_num: SeqNum) -> B256;
 }
 
-/// Abstraction over the execution database (C++ mpt::Db interface).
 pub trait ExecutionDb: Send + Sync {
-    fn has_executed(&self, block_id: &B256, seq_num: u64) -> bool;
-    fn get_latest_finalized_version(&self) -> u64;
+    fn has_executed(&self, block_id: &BlockId, seq_num: SeqNum) -> bool;
+    fn get_latest_finalized_version(&self) -> SeqNum;
 
-    fn read_account(&self, address: &Address) -> Option<Account>;
+    fn read_account(&self, address: &Address) -> Option<EthAccount>;
     fn read_storage(&self, address: &Address, slot: &B256) -> B256;
-    fn read_eth_header(&self) -> BlockHeader;
+    fn read_eth_header(&self) -> Header;
 
-    fn set_block_and_prefix(&mut self, block_number: u64, block_id: B256);
+    fn set_block_and_prefix(&mut self, seq_num: SeqNum, block_id: BlockId);
 
     fn commit(
         &mut self,
-        block_id: B256,
-        header: &BlockHeader,
+        block_id: BlockId,
+        header: &Header,
         state_deltas: &StateDeltas,
         code: &CodeMap,
-        receipts: &[Receipt],
-        transactions: &[Transaction],
+        receipts: &[ReceiptEnvelope],
+        transactions: &[TxEnvelope],
     );
 
-    fn finalize(&mut self, block_number: u64, block_id: B256);
-    fn update_voted_metadata(&mut self, block_number: u64, block_id: B256);
-    fn update_proposed_metadata(&mut self, block_number: u64, block_id: B256);
-    fn update_verified_block(&mut self, block_number: u64);
+    fn finalize(&mut self, seq_num: SeqNum, block_id: BlockId);
+    fn update_voted_metadata(&mut self, seq_num: SeqNum, block_id: BlockId);
+    fn update_proposed_metadata(&mut self, seq_num: SeqNum, block_id: BlockId);
+    fn update_verified_block(&mut self, seq_num: SeqNum);
 }
 
-/// Abstraction over the EVM block execution.
 pub trait BlockExecutor: Send + Sync {
     fn execute_block(
         &self,
-        chain: &ChainConfig,
         block: &Block,
         db: &mut dyn ExecutionDb,
         block_hash_buffer: &dyn BlockHashBuffer,

@@ -9,7 +9,7 @@
 use super::protocol::SyncProtocolState;
 use super::types::{SyncDone, SyncUpsertType};
 use super::{StateSyncApplier, StateSyncApplierDb, StateSyncBatch};
-use crate::types::BlockHeader;
+use alloy_consensus::Header;
 use crate::validation::compute_block_hash;
 
 const NUM_PREFIXES: usize = 256;
@@ -20,7 +20,7 @@ pub struct StateSyncClientContext {
     pub protocol: SyncProtocolState,
     /// (progress, old_target) per prefix. C++ initializes with (latest_version, latest_version).
     pub progress: Vec<(u64, u64)>,
-    pub target: Option<BlockHeader>,
+    pub target: Option<Header>,
     pub current: u64,
     /// Prefixes that need re-request after a partial done.
     pub pending_requests: Vec<u64>,
@@ -115,7 +115,7 @@ impl StateSyncApplier for StateSyncClientContext {
         result
     }
 
-    fn set_target(&mut self, target_header: &BlockHeader) {
+    fn set_target(&mut self, target_header: &Header) {
         assert_ne!(target_header.number, INVALID_BLOCK_NUM);
         if let Some(ref old) = self.target {
             assert!(target_header.number >= old.number);

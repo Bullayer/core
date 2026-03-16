@@ -41,9 +41,8 @@ use monad_eth_txpool_executor::EthTxPoolExecutor;
 use monad_rpc::txpool::channel_bridge::EthTxPoolChannelBridge;
 use monad_execution_engine::engine::ExecutionEngine;
 use monad_execution_engine::mock::{
-    db::InMemoryExecutionDb, executor::MockBlockExecutor, recovery::MockSignatureRecovery,
+    db::InMemoryExecutionDb, executor::MockBlockExecutor,
 };
-use monad_execution_engine::types::ChainConfig as ExecChainConfig;
 use monad_executor::{Executor, ExecutorMetricsChain};
 use monad_executor_glue::{LogFriendlyMonadEvent, Message, MonadEvent};
 use monad_ledger::MonadBlockFileLedger;
@@ -229,13 +228,11 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         }
     });
 
-    let (execution_engine, execution_event_rx) = ExecutionEngine::start(
-        ExecChainConfig {
-            chain_id: alloy_primitives::U256::from(node_state.node_config.chain_id),
-        },
-        Box::new(InMemoryExecutionDb::new()),
-        Box::new(MockBlockExecutor::new()),
-    );
+    let (execution_engine, execution_event_rx) =
+        ExecutionEngine::<SignatureType, SignatureCollectionType>::start(
+            Box::new(InMemoryExecutionDb::new()),
+            Box::new(MockBlockExecutor::new()),
+        );
 
     let mut executor = ParentExecutor {
         metrics: Default::default(),

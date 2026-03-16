@@ -14,6 +14,11 @@ alloy-rlp = { workspace = true }
 async-trait = "0.1"
 bytes = { workspace = true }
 hex = { workspace = true }
+monad-consensus-types = { workspace = true }
+monad-crypto = { workspace = true }
+monad-types = { workspace = true }
+monad-eth-types = { workspace = true }
+monad-validator = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tiny-keccak = { workspace = true, features = ["keccak"] }
@@ -21,4 +26,5 @@ tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+monad-testutil = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }

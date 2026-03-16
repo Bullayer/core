@@ -109,6 +109,7 @@ fn attributes_from_request(req: &ServiceRequest) -> Vec<KeyValue> {
     attributes
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Metrics {
     provider: SdkMeterProvider,

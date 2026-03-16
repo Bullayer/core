@@ -2,13 +2,13 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
-use alloy_primitives::B256;
+use alloy_consensus::Header;
+use alloy_primitives::{B256, Bytes, U256};
 
 use crate::traits::{BlockExecutor, BlockHashBuffer, ExecutionDb, ExecutionError};
-use crate::types::{Block, BlockExecOutput, ChainConfig};
+use crate::types::{Block, BlockExecOutput};
 use crate::validation::compute_block_hash;
 
-/// Mock block executor that returns deterministic results without running EVM.
 pub struct MockBlockExecutor;
 
 impl MockBlockExecutor {
@@ -26,16 +26,32 @@ impl Default for MockBlockExecutor {
 impl BlockExecutor for MockBlockExecutor {
     fn execute_block(
         &self,
-        _chain: &ChainConfig,
         block: &Block,
         _db: &mut dyn ExecutionDb,
         _block_hash_buffer: &dyn BlockHashBuffer,
     ) -> Result<BlockExecOutput, ExecutionError> {
-        let mut output_header = block.header.clone();
-        // Mock: set state_root and receipts_root to deterministic values
+        let proposed = &block.header;
+        let mut output_header = Header {
+            number: proposed.number,
+            gas_limit: proposed.gas_limit,
+            gas_used: block.transactions.len() as u64 * 21000,
+            timestamp: proposed.timestamp,
+            beneficiary: proposed.beneficiary,
+            difficulty: U256::from(proposed.difficulty),
+            ommers_hash: B256::from(proposed.ommers_hash),
+            transactions_root: B256::from(proposed.transactions_root),
+            extra_data: Bytes::copy_from_slice(&proposed.extra_data),
+            mix_hash: B256::from(proposed.mix_hash),
+            nonce: proposed.nonce.into(),
+            base_fee_per_gas: Some(proposed.base_fee_per_gas),
+            withdrawals_root: Some(B256::from(proposed.withdrawals_root)),
+            blob_gas_used: Some(proposed.blob_gas_used),
+            excess_blob_gas: Some(proposed.excess_blob_gas),
+            parent_beacon_block_root: Some(B256::from(proposed.parent_beacon_block_root)),
+            ..Default::default()
+        };
         output_header.state_root = B256::from([0xAA; 32]);
         output_header.receipts_root = B256::from([0xBB; 32]);
-        output_header.gas_used = block.transactions.len() as u64 * 21000;
 
         let block_hash = compute_block_hash(&output_header);
 

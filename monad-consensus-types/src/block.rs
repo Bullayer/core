@@ -572,6 +572,10 @@ where
         &self.header.author
     }
 
+    pub fn get_execution_inputs(&self) -> &EPT::ProposedHeader {
+        &self.header.execution_inputs
+    }
+
     pub fn get_execution_results(&self) -> &Vec<EPT::FinalizedHeader> {
         &self.header.delayed_execution_results
     }

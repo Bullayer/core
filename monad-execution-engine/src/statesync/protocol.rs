@@ -8,11 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::U256;
 use tiny_keccak::{Hasher, Keccak};
 
 use super::types::{StateSyncRequest, SyncUpsertType};
-use crate::types::{Account, BlockHeader};
+use alloy_consensus::Header;
+
+use monad_eth_types::EthAccount;
 
 const COMMIT_INTERVAL: u64 = 1 << 20;
 
@@ -22,7 +24,7 @@ pub struct SyncProtocolState {
     pub buffered: HashMap<[u8; 20], HashMap<[u8; 32], [u8; 32]>>,
     pub code: HashMap<[u8; 32], Vec<u8>>,
     pub seen_code: HashSet<[u8; 32]>,
-    pub headers: [Option<BlockHeader>; 256],
+    pub headers: [Option<Header>; 256],
     pub n_upserts: u64,
     pub needs_commit: bool,
     /// Upserts deferred until after the next commit (incarnation case).
@@ -32,7 +34,7 @@ pub struct SyncProtocolState {
 
 #[derive(Clone, Debug)]
 pub struct AccountDelta {
-    pub account: Option<Account>,
+    pub account: Option<EthAccount>,
     pub storage: HashMap<[u8; 32], [u8; 32]>,
 }
 
@@ -183,13 +185,15 @@ pub fn handle_upsert(
 fn account_update(
     state: &mut SyncProtocolState,
     addr: [u8; 20],
-    account: Option<Account>,
+    account: Option<EthAccount>,
     db: &dyn super::StateSyncApplierDb,
 ) -> bool {
     // C++ L46-49: track code_hash in seen_code
     if let Some(ref acct) = account {
-        if acct.code_hash != B256::ZERO {
-            state.seen_code.insert(acct.code_hash.0);
+        if let Some(hash) = acct.code_hash {
+            if hash != [0u8; 32] {
+                state.seen_code.insert(hash);
+            }
         }
     }
 
@@ -240,7 +244,7 @@ fn account_update(
                 retry_data.extend_from_slice(&acct.nonce.to_be_bytes());
                 let balance_bytes: [u8; 32] = acct.balance.to_be_bytes();
                 retry_data.extend_from_slice(&balance_bytes);
-                retry_data.extend_from_slice(acct.code_hash.as_slice());
+                retry_data.extend_from_slice(&acct.code_hash.unwrap_or_default());
                 state
                     .pending_retry
                     .push((SyncUpsertType::Account, retry_data));
@@ -348,7 +352,7 @@ fn storage_update(
 
 /// Decode account from TrieDB-style bytes: [addr(20) | nonce(8) | balance(32) | code_hash(32)].
 /// For mock phase, we decode as much as available.
-fn decode_account_db(data: &[u8]) -> Option<([u8; 20], Account)> {
+fn decode_account_db(data: &[u8]) -> Option<([u8; 20], EthAccount)> {
     if data.len() < 20 {
         return None;
     }
@@ -369,18 +373,18 @@ fn decode_account_db(data: &[u8]) -> Option<([u8; 20], Account)> {
     };
 
     let code_hash = if rest.len() >= 72 {
-        B256::from_slice(&rest[40..72])
+        Some(rest[40..72].try_into().unwrap())
     } else {
-        B256::ZERO
+        None
     };
 
     Some((
         addr,
-        Account {
+        EthAccount {
             nonce,
             balance,
             code_hash,
-            incarnation: 0,
+            is_delegated: false,
         },
     ))
 }
@@ -411,9 +415,9 @@ fn decode_storage_key(data: &[u8]) -> Option<[u8; 32]> {
     Some(key)
 }
 
-fn decode_block_header_from_bytes(_data: &[u8]) -> Option<BlockHeader> {
+fn decode_block_header_from_bytes(_data: &[u8]) -> Option<Header> {
     // TODO: implement proper RLP decoding of block header
-    Some(BlockHeader::default())
+    Some(Header::default())
 }
 
 fn keccak256_bytes(data: &[u8]) -> [u8; 32] {

@@ -247,15 +247,12 @@ mod tests {
     use itertools::Itertools;
     use monad_eth_testutil::{make_legacy_tx, S1, S2};
     use monad_eth_txpool_ipc::EthTxPoolIpcStream;
-    use monad_eth_txpool_types::EthTxPoolSnapshot;
+    use monad_eth_txpool_types::{EthTxPoolBridgeStateView, EthTxPoolSnapshot};
     use tempfile::TempDir;
     use test_case::test_matrix;
     use tokio::{net::UnixListener, time::Duration};
 
-    use super::{
-        client::EthTxPoolBridgeClient, handle::EthTxPoolBridgeHandle,
-        state::EthTxPoolBridgeStateView, EthTxPoolBridge, TxStatus,
-    };
+    use super::{client::EthTxPoolBridgeClient, handle::EthTxPoolBridgeHandle, EthTxPoolBridge, TxStatus};
 
     const BASE_FEE_PER_GAS: u64 = 100_000_000_000;
 
@@ -323,7 +320,7 @@ mod tests {
             completed_clone.store(true, Ordering::SeqCst);
         }));
 
-        handle.await;
+        let _ = handle.await;
 
         assert!(completed.load(Ordering::SeqCst));
     }

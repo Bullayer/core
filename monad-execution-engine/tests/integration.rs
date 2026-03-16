@@ -7,6 +7,18 @@
 use std::time::Duration;
 
 use alloy_primitives::{Address, B256, U256};
+use monad_consensus_types::{
+    block::{ConsensusBlockHeader, ConsensusFullBlock},
+    payload::{ConsensusBlockBody, ConsensusBlockBodyInner, RoundSignature},
+    quorum_certificate::QuorumCertificate,
+};
+use monad_crypto::{
+    certificate_signature::CertificateKeyPair,
+    NopKeyPair, NopSignature,
+};
+use monad_eth_types::{EthBlockBody, EthExecutionProtocol, ProposedEthHeader};
+use monad_testutil::signing::MockSignatures;
+use monad_types::{BlockId, Epoch, NodeId, Round, SeqNum};
 use tokio::sync::broadcast;
 
 use monad_execution_engine::command::ExecutionCommand;
@@ -17,78 +29,66 @@ use monad_execution_engine::events::ExecutionEvent;
 use monad_execution_engine::mock::db::InMemoryExecutionDb;
 use monad_execution_engine::mock::ethcall::MockEthCallHandler;
 use monad_execution_engine::mock::executor::MockBlockExecutor;
-use monad_execution_engine::mock::recovery::MockSignatureRecovery;
 use monad_execution_engine::mock::statesync::MockStateSyncProvider;
 use monad_execution_engine::statesync::{StateSyncProvider, StateSyncRequest};
-use monad_execution_engine::types::{
-    BlockHeader, ChainConfig, ConsensusBody, ConsensusHeader, Transaction,
-};
+use alloy_consensus::Header;
 
-fn make_chain_config() -> ChainConfig {
-    ChainConfig {
-        chain_id: U256::from(1),
-    }
-}
+type TestST = NopSignature;
+type TestSCT = MockSignatures<NopSignature>;
 
-fn make_consensus_header(seqno: u64, block_number: u64, parent_id: B256) -> ConsensusHeader {
-    ConsensusHeader {
-        seqno,
-        parent_id,
-        block_body_id: B256::ZERO,
-        block_round: seqno,
-        epoch: 0,
-        timestamp_ns: 1_000_000_000 * seqno as u128,
-        author: [0u8; 33],
-        execution_inputs: BlockHeader {
-            number: block_number,
-            timestamp: seqno,
+fn make_consensus_block(
+    seq_num: u64,
+    round: u64,
+) -> ConsensusFullBlock<TestST, TestSCT, EthExecutionProtocol> {
+    let body = ConsensusBlockBody::new(ConsensusBlockBodyInner {
+        execution_body: EthBlockBody::default(),
+    });
+
+    let keypair = NopKeyPair::from_bytes(&mut [1u8; 32]).unwrap();
+    let round_sig = RoundSignature::new(Round(round), &keypair);
+
+    let header = ConsensusBlockHeader::new(
+        NodeId::new(keypair.pubkey()),
+        Epoch(1),
+        Round(round),
+        Vec::new(),
+        ProposedEthHeader {
+            number: seq_num,
             gas_limit: 30_000_000,
             ..Default::default()
         },
-        delayed_execution_results: Vec::new(),
-        base_fee_trend: 0,
-        base_fee_moment: 0,
-    }
-}
+        body.get_id(),
+        QuorumCertificate::genesis_qc(),
+        SeqNum(seq_num),
+        1_000_000_000 * seq_num as u128,
+        round_sig,
+        0,
+        0,
+        0,
+    );
 
-fn make_body(num_txs: usize) -> ConsensusBody {
-    let transactions = (0..num_txs)
-        .map(|i| Transaction {
-            hash: B256::from([i as u8; 32]),
-            data: vec![0u8; 100],
-        })
-        .collect();
-
-    ConsensusBody {
-        transactions,
-        ommers: Vec::new(),
-        withdrawals: Vec::new(),
-    }
+    ConsensusFullBlock::new(header, body).expect("header/body mismatch")
 }
 
 /// Full data flow: send Propose -> collect BlockProposed event
 /// Then send Finalize -> collect BlockFinalized event
 #[tokio::test]
 async fn test_propose_execute_finalize_flow() {
-    let chain = make_chain_config();
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
-    let recovery = Box::new(MockSignatureRecovery::new());
 
-    let (engine, mut event_rx) = ExecutionEngine::start(chain, db, executor, recovery);
+    let (engine, mut event_rx) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
     let cmd_tx = engine.command_sender();
 
-    let block_id = B256::from([0x01; 32]);
-    let header = make_consensus_header(1, 1, B256::ZERO);
-    let body = make_body(2);
+    let block = make_consensus_block(1, 1);
+    let block_id = block.get_id();
 
     cmd_tx
         .send(ExecutionCommand::Propose {
             block_id,
-            header,
-            body,
+            block: block.clone(),
         })
-        .await
         .unwrap();
 
     let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
@@ -98,26 +98,22 @@ async fn test_propose_execute_finalize_flow() {
 
     match event {
         ExecutionEvent::BlockProposed {
-            block_number,
+            seq_num,
             block_id: bid,
-            header: h,
             ..
         } => {
-            assert_eq!(block_number, 1);
+            assert_eq!(seq_num, SeqNum(1));
             assert_eq!(bid, block_id);
-            assert_eq!(h.gas_used, 2 * 21000);
         }
         other => panic!("expected BlockProposed, got {:?}", other),
     }
 
-    // Finalize the block
     cmd_tx
         .send(ExecutionCommand::Finalize {
-            block_number: 1,
+            seq_num: SeqNum(1),
             block_id,
-            verified_blocks: vec![1],
+            block,
         })
-        .await
         .unwrap();
 
     let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
@@ -127,10 +123,10 @@ async fn test_propose_execute_finalize_flow() {
 
     match event {
         ExecutionEvent::BlockFinalized {
-            block_number,
+            seq_num,
             block_id: bid,
         } => {
-            assert_eq!(block_number, 1);
+            assert_eq!(seq_num, SeqNum(1));
             assert_eq!(bid, block_id);
         }
         other => panic!("expected BlockFinalized, got {:?}", other),
@@ -142,8 +138,8 @@ async fn test_propose_execute_finalize_flow() {
         .unwrap();
 
     match event {
-        ExecutionEvent::BlockVerified { block_number } => {
-            assert_eq!(block_number, 1);
+        ExecutionEvent::BlockVerified { seq_num } => {
+            assert_eq!(seq_num, SeqNum(1));
         }
         other => panic!("expected BlockVerified, got {:?}", other),
     }
@@ -154,70 +150,58 @@ async fn test_propose_execute_finalize_flow() {
 /// Multiple sequential blocks: propose and finalize blocks 1..=3
 #[tokio::test]
 async fn test_multiple_blocks_sequential() {
-    let chain = make_chain_config();
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
-    let recovery = Box::new(MockSignatureRecovery::new());
 
-    let (engine, mut event_rx) = ExecutionEngine::start(chain, db, executor, recovery);
+    let (engine, mut event_rx) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
     let cmd_tx = engine.command_sender();
 
-    let mut parent_id = B256::ZERO;
-
     for i in 1..=3u64 {
-        let block_id = B256::from([i as u8; 32]);
-        let header = make_consensus_header(i, i, parent_id);
-        let body = make_body(1);
+        let block = make_consensus_block(i, i);
+        let block_id = block.get_id();
 
         cmd_tx
             .send(ExecutionCommand::Propose {
                 block_id,
-                header,
-                body,
+                block: block.clone(),
             })
-            .await
             .unwrap();
 
-        // Drain BlockProposed
         let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
             .await
             .expect("timed out")
             .unwrap();
         match &event {
-            ExecutionEvent::BlockProposed { block_number, .. } => assert_eq!(*block_number, i),
+            ExecutionEvent::BlockProposed { seq_num, .. } => assert_eq!(*seq_num, SeqNum(i)),
             other => panic!("expected BlockProposed, got {:?}", other),
         }
 
         cmd_tx
             .send(ExecutionCommand::Finalize {
-                block_number: i,
+                seq_num: SeqNum(i),
                 block_id,
-                verified_blocks: vec![i],
+                block,
             })
-            .await
             .unwrap();
 
-        // Drain BlockFinalized
         let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
             .await
             .expect("timed out")
             .unwrap();
         assert!(matches!(
             event,
-            ExecutionEvent::BlockFinalized { block_number, .. } if block_number == i
+            ExecutionEvent::BlockFinalized { seq_num, .. } if seq_num == SeqNum(i)
         ));
 
-        // Drain BlockVerified
         let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
             .await
             .expect("timed out")
             .unwrap();
         assert!(matches!(
             event,
-            ExecutionEvent::BlockVerified { block_number } if block_number == i
+            ExecutionEvent::BlockVerified { seq_num } if seq_num == SeqNum(i)
         ));
-
-        parent_id = block_id;
     }
 
     engine.shutdown().await;
@@ -231,14 +215,14 @@ async fn test_channel_event_source() {
     let mut source = ChannelEventSource::new(rx);
 
     tx.send(ExecutionEvent::BlockVoted {
-        block_number: 42,
-        block_id: B256::ZERO,
+        seq_num: SeqNum(42),
+        block_id: monad_types::GENESIS_BLOCK_ID,
     })
     .unwrap();
 
     let event = source.next_event().await.unwrap();
     match event {
-        ExecutionEvent::BlockVoted { block_number, .. } => assert_eq!(block_number, 42),
+        ExecutionEvent::BlockVoted { seq_num, .. } => assert_eq!(seq_num, SeqNum(42)),
         other => panic!("expected BlockVoted, got {:?}", other),
     }
 
@@ -261,7 +245,7 @@ async fn test_mock_ethcall_handler() {
             vec![],
             vec![],
             Address::ZERO,
-            1,
+            SeqNum(1),
             None,
             &overrides,
             MonadTracer::NoopTracer,
@@ -302,80 +286,24 @@ async fn test_mock_statesync_provider() {
 /// Shutdown: verify graceful shutdown via command
 #[tokio::test]
 async fn test_graceful_shutdown() {
-    let chain = make_chain_config();
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
-    let recovery = Box::new(MockSignatureRecovery::new());
 
-    let (engine, _event_rx) = ExecutionEngine::start(chain, db, executor, recovery);
+    let (engine, _event_rx) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
 
     tokio::time::timeout(Duration::from_secs(5), engine.shutdown())
         .await
         .expect("shutdown timed out");
 }
 
-/// Vote command after propose: should emit BlockVoted + BlockFinalized
-#[tokio::test]
-async fn test_propose_then_vote() {
-    let chain = make_chain_config();
-    let db = Box::new(InMemoryExecutionDb::new());
-    let executor = Box::new(MockBlockExecutor::new());
-    let recovery = Box::new(MockSignatureRecovery::new());
-
-    let (engine, mut event_rx) = ExecutionEngine::start(chain, db, executor, recovery);
-    let cmd_tx = engine.command_sender();
-
-    let block_id = B256::from([0xFF; 32]);
-    let header = make_consensus_header(1, 1, B256::ZERO);
-    let body = make_body(1);
-
-    // First propose the block
-    cmd_tx
-        .send(ExecutionCommand::Propose {
-            block_id,
-            header,
-            body,
-        })
-        .await
-        .unwrap();
-
-    // Drain BlockProposed
-    let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
-        .await
-        .expect("timed out")
-        .unwrap();
-    assert!(matches!(event, ExecutionEvent::BlockProposed { .. }));
-
-    // Then vote to finalize
-    cmd_tx
-        .send(ExecutionCommand::Vote {
-            block_number: 1,
-            block_id,
-        })
-        .await
-        .unwrap();
-
-    // Should get BlockVoted then BlockFinalized
-    let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
-        .await
-        .expect("timed out")
-        .unwrap();
-    assert!(matches!(event, ExecutionEvent::BlockVoted { .. }));
-
-    let event = tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
-        .await
-        .expect("timed out")
-        .unwrap();
-    assert!(matches!(event, ExecutionEvent::BlockFinalized { .. }));
-
-    engine.shutdown().await;
-}
-
 /// InMemoryExecutionDb: verify basic state operations
 #[tokio::test]
 async fn test_in_memory_db_state() {
     use monad_execution_engine::traits::ExecutionDb;
-    use monad_execution_engine::types::{Account, AccountDelta, StorageDelta};
+    use monad_eth_types::EthAccount;
+    use monad_execution_engine::types::{AccountDelta, StorageDelta};
+    use monad_types::GENESIS_BLOCK_ID;
     use std::collections::HashMap;
 
     let mut db = InMemoryExecutionDb::new();
@@ -387,12 +315,11 @@ async fn test_in_memory_db_state() {
     assert!(db.read_account(&addr).is_none());
     assert_eq!(db.read_storage(&addr, &slot), B256::ZERO);
 
-    // Commit a block with state changes
-    let account = Account {
+    let account = EthAccount {
         nonce: 1,
         balance: U256::from(1000),
-        code_hash: B256::ZERO,
-        incarnation: 0,
+        code_hash: None,
+        is_delegated: false,
     };
 
     let mut storage_deltas = HashMap::new();
@@ -414,17 +341,17 @@ async fn test_in_memory_db_state() {
         },
     );
 
-    let header = BlockHeader {
+    let header = Header {
         number: 1,
         ..Default::default()
     };
 
+    let block_id = BlockId(monad_crypto::hasher::Hash([0x01; 32]));
     db.commit(
-        B256::from([0x01; 32]),
+        block_id,
         &header,
         &state_deltas,
         &HashMap::new(),
-        &[],
         &[],
         &[],
     );
@@ -433,34 +360,29 @@ async fn test_in_memory_db_state() {
     assert_eq!(stored_account.nonce, 1);
     assert_eq!(db.read_storage(&addr, &slot), value);
 
-    // Verify has_executed
-    assert!(db.has_executed(&B256::from([0x01; 32]), 1));
-    assert!(!db.has_executed(&B256::from([0x02; 32]), 1));
+    assert!(db.has_executed(&block_id, SeqNum(1)));
+    assert!(!db.has_executed(&GENESIS_BLOCK_ID, SeqNum(1)));
 }
 
 /// Multiple subscribers can all receive events from the same engine
 #[tokio::test]
 async fn test_multiple_event_subscribers() {
-    let chain = make_chain_config();
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
-    let recovery = Box::new(MockSignatureRecovery::new());
 
-    let (engine, mut rx1) = ExecutionEngine::start(chain, db, executor, recovery);
+    let (engine, mut rx1) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
     let mut rx2 = engine.subscribe_events();
     let cmd_tx = engine.command_sender();
 
-    let block_id = B256::from([0x01; 32]);
-    let header = make_consensus_header(1, 1, B256::ZERO);
-    let body = make_body(0);
+    let block = make_consensus_block(1, 1);
+    let block_id = block.get_id();
 
     cmd_tx
         .send(ExecutionCommand::Propose {
             block_id,
-            header,
-            body,
+            block,
         })
-        .await
         .unwrap();
 
     let e1 = tokio::time::timeout(Duration::from_secs(5), rx1.recv())

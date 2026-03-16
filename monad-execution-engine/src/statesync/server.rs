@@ -4,6 +4,7 @@
 //
 // Rewrite of C++ statesync_server.cpp handle_sync_request (L180-489).
 
+use monad_types::SeqNum;
 use tiny_keccak::{Hasher, Keccak};
 
 use super::deletion_tracker::FinalizedDeletions;
@@ -85,7 +86,7 @@ fn send_deletions(
     assert!(request.old_target <= request.target);
 
     for block_num in (request.old_target + 1)..=request.target {
-        let found = finalized_deletions.for_each(block_num, |deletion: &Deletion| {
+        let found = finalized_deletions.for_each(SeqNum(block_num), |deletion: &Deletion| {
             if !deletion_matches_prefix(deletion, request.prefix, request.prefix_bytes) {
                 return;
             }

@@ -5,24 +5,27 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy_primitives::{Address, B256};
+use monad_types::{BlockId, SeqNum};
+
+use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
 
 use crate::statesync::{StateSyncApplierDb, StateSyncBatch, StateSyncTraversable};
 use crate::statesync::types::SyncUpsertType;
 use crate::traits::ExecutionDb;
-use crate::types::{Account, BlockHeader, CodeMap, Receipt, StateDeltas, Transaction};
+use monad_eth_types::EthAccount;
 
-/// In-memory implementation of ExecutionDb + StateSyncTraversable + StateSyncApplierDb.
-/// Uses HashMaps for state, supports propose/finalize semantics.
+use crate::types::{CodeMap, StateDeltas};
+
 pub struct InMemoryExecutionDb {
-    accounts: HashMap<Address, Account>,
+    accounts: HashMap<Address, EthAccount>,
     storage: HashMap<(Address, B256), B256>,
     code: HashMap<B256, Vec<u8>>,
-    headers: HashMap<u64, BlockHeader>,
-    executed_blocks: HashSet<(B256, u64)>,
-    latest_finalized: u64,
-    latest_verified: u64,
-    current_block_number: u64,
-    current_block_id: B256,
+    headers: HashMap<SeqNum, Header>,
+    executed_blocks: HashSet<(BlockId, SeqNum)>,
+    latest_finalized: SeqNum,
+    latest_verified: SeqNum,
+    current_seq_num: SeqNum,
+    current_block_id: BlockId,
 }
 
 impl InMemoryExecutionDb {
@@ -33,16 +36,16 @@ impl InMemoryExecutionDb {
             code: HashMap::new(),
             headers: HashMap::new(),
             executed_blocks: HashSet::new(),
-            latest_finalized: 0,
-            latest_verified: 0,
-            current_block_number: 0,
-            current_block_id: B256::ZERO,
+            latest_finalized: SeqNum(0),
+            latest_verified: SeqNum(0),
+            current_seq_num: SeqNum(0),
+            current_block_id: monad_types::GENESIS_BLOCK_ID,
         }
     }
 
     pub fn with_finalized(finalized: u64) -> Self {
         let mut db = Self::new();
-        db.latest_finalized = finalized;
+        db.latest_finalized = SeqNum(finalized);
         db
     }
 }
@@ -54,15 +57,15 @@ impl Default for InMemoryExecutionDb {
 }
 
 impl ExecutionDb for InMemoryExecutionDb {
-    fn has_executed(&self, block_id: &B256, seq_num: u64) -> bool {
+    fn has_executed(&self, block_id: &BlockId, seq_num: SeqNum) -> bool {
         self.executed_blocks.contains(&(*block_id, seq_num))
     }
 
-    fn get_latest_finalized_version(&self) -> u64 {
+    fn get_latest_finalized_version(&self) -> SeqNum {
         self.latest_finalized
     }
 
-    fn read_account(&self, address: &Address) -> Option<Account> {
+    fn read_account(&self, address: &Address) -> Option<EthAccount> {
         self.accounts.get(address).cloned()
     }
 
@@ -73,28 +76,27 @@ impl ExecutionDb for InMemoryExecutionDb {
             .unwrap_or(B256::ZERO)
     }
 
-    fn read_eth_header(&self) -> BlockHeader {
+    fn read_eth_header(&self) -> Header {
         self.headers
-            .get(&self.current_block_number)
+            .get(&self.current_seq_num)
             .cloned()
             .unwrap_or_default()
     }
 
-    fn set_block_and_prefix(&mut self, block_number: u64, block_id: B256) {
-        self.current_block_number = block_number;
+    fn set_block_and_prefix(&mut self, seq_num: SeqNum, block_id: BlockId) {
+        self.current_seq_num = seq_num;
         self.current_block_id = block_id;
     }
 
     fn commit(
         &mut self,
-        block_id: B256,
-        header: &BlockHeader,
+        block_id: BlockId,
+        header: &Header,
         state_deltas: &StateDeltas,
         code: &CodeMap,
-        _receipts: &[Receipt],
-        _transactions: &[Transaction],
+        _receipts: &[ReceiptEnvelope],
+        _transactions: &[TxEnvelope],
     ) {
-        // Apply state deltas
         for (address, delta) in state_deltas {
             if let Some(new_acct) = &delta.new_account {
                 self.accounts.insert(*address, new_acct.clone());
@@ -111,35 +113,33 @@ impl ExecutionDb for InMemoryExecutionDb {
             }
         }
 
-        // Store code
         for (hash, data) in code {
             self.code.insert(*hash, data.clone());
         }
 
-        // Store header
-        self.headers.insert(header.number, header.clone());
-        self.executed_blocks.insert((block_id, header.number));
+        let sn = SeqNum(header.number);
+        self.headers.insert(sn, header.clone());
+        self.executed_blocks.insert((block_id, sn));
     }
 
-    fn finalize(&mut self, block_number: u64, _block_id: B256) {
-        self.latest_finalized = block_number;
+    fn finalize(&mut self, seq_num: SeqNum, _block_id: BlockId) {
+        self.latest_finalized = seq_num;
     }
 
-    fn update_voted_metadata(&mut self, _block_number: u64, _block_id: B256) {}
-    fn update_proposed_metadata(&mut self, _block_number: u64, _block_id: B256) {}
-    fn update_verified_block(&mut self, block_number: u64) {
-        self.latest_verified = block_number;
+    fn update_voted_metadata(&mut self, _seq_num: SeqNum, _block_id: BlockId) {}
+    fn update_proposed_metadata(&mut self, _seq_num: SeqNum, _block_id: BlockId) {}
+    fn update_verified_block(&mut self, seq_num: SeqNum) {
+        self.latest_verified = seq_num;
     }
 }
 
 impl StateSyncTraversable for InMemoryExecutionDb {
     fn has_version(&self, target: u64) -> bool {
-        target <= self.latest_finalized
+        target <= self.latest_finalized.0
     }
 
     fn read_block_header_at(&self, version: u64) -> Option<Vec<u8>> {
-        self.headers.get(&version).map(|_h| {
-            // Return minimal mock header bytes
+        self.headers.get(&SeqNum(version)).map(|_h| {
             vec![0u8; 32]
         })
     }
@@ -151,7 +151,6 @@ impl StateSyncTraversable for InMemoryExecutionDb {
         _until: u64,
         emit: &mut dyn FnMut(SyncUpsertType, &[u8]),
     ) -> bool {
-        // Mock traversal: emit accounts whose keccak256(addr) starts with prefix
         for (addr, account) in &self.accounts {
             let addr_bytes = addr.as_slice();
             if !prefix.is_empty() {
@@ -164,13 +163,12 @@ impl StateSyncTraversable for InMemoryExecutionDb {
                 }
             }
 
-            // Encode: addr(20) + nonce(8) + balance(32) + code_hash(32) = 92 bytes
             let mut data = Vec::with_capacity(92);
             data.extend_from_slice(addr_bytes);
             data.extend_from_slice(&account.nonce.to_be_bytes());
             let balance_bytes: [u8; 32] = account.balance.to_be_bytes();
             data.extend_from_slice(&balance_bytes);
-            data.extend_from_slice(account.code_hash.as_slice());
+            data.extend_from_slice(&account.code_hash.unwrap_or_default());
             emit(SyncUpsertType::Account, &data);
         }
 
@@ -193,10 +191,10 @@ impl StateSyncTraversable for InMemoryExecutionDb {
 
 impl StateSyncApplierDb for InMemoryExecutionDb {
     fn get_latest_version(&self) -> u64 {
-        self.latest_finalized
+        self.latest_finalized.0
     }
 
-    fn read_account(&self, addr: &[u8; 20]) -> Option<Account> {
+    fn read_account(&self, addr: &[u8; 20]) -> Option<EthAccount> {
         let address = Address::from_slice(addr);
         self.accounts.get(&address).cloned()
     }
@@ -237,12 +235,11 @@ impl StateSyncApplierDb for InMemoryExecutionDb {
     }
 
     fn finalize_statesync(&mut self, target: u64) -> bool {
-        self.latest_finalized = target;
+        self.latest_finalized = SeqNum(target);
         true
     }
 
     fn state_root(&self) -> [u8; 32] {
-        // Mock: return zero state root
         [0u8; 32]
     }
 

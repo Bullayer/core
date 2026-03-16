@@ -2,26 +2,26 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
-use alloy_primitives::B256;
+use monad_consensus_types::block::ConsensusFullBlock;
+use monad_crypto::certificate_signature::{CertificateSignaturePubKey, CertificateSignatureRecoverable};
+use monad_eth_types::EthExecutionProtocol;
+use monad_types::{BlockId, SeqNum};
+use monad_validator::signature_collection::SignatureCollection;
 
-use crate::types::{ConsensusBody, ConsensusHeader};
-
-/// Commands sent from consensus (via Ledger) to the ExecutionEngine.
 #[derive(Clone, Debug)]
-pub enum ExecutionCommand {
+pub enum ExecutionCommand<ST, SCT>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
     Propose {
-        block_id: B256,
-        header: ConsensusHeader,
-        body: ConsensusBody,
-    },
-    Vote {
-        block_number: u64,
-        block_id: B256,
+        block_id: BlockId,
+        block: ConsensusFullBlock<ST, SCT, EthExecutionProtocol>,
     },
     Finalize {
-        block_number: u64,
-        block_id: B256,
-        verified_blocks: Vec<u64>,
+        seq_num: SeqNum,
+        block_id: BlockId,
+        block: ConsensusFullBlock<ST, SCT, EthExecutionProtocol>,
     },
     Shutdown,
 }

@@ -2,37 +2,42 @@
 //
 // Licensed under the GNU General Public License v3.0.
 
+use monad_crypto::certificate_signature::{CertificateSignaturePubKey, CertificateSignatureRecoverable};
+use monad_validator::signature_collection::SignatureCollection;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::command::ExecutionCommand;
 use crate::events::ExecutionEvent;
 use crate::runloop::runloop_monad;
 use crate::traits::{BlockExecutor, ExecutionDb};
-use crate::types::ChainConfig;
 
-const COMMAND_CHANNEL_CAPACITY: usize = 2048;
 const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
-pub struct ExecutionEngine {
-    cmd_tx: mpsc::Sender<ExecutionCommand>,
+pub struct ExecutionEngine<ST, SCT>
+where
+    ST: CertificateSignatureRecoverable,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
+{
+    cmd_tx: mpsc::UnboundedSender<ExecutionCommand<ST, SCT>>,
     event_tx: broadcast::Sender<ExecutionEvent>,
     handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl ExecutionEngine {
-    /// Create and start the execution engine.
-    /// Returns the engine and a broadcast receiver for execution events.
+impl<ST, SCT> ExecutionEngine<ST, SCT>
+where
+    ST: CertificateSignatureRecoverable + 'static,
+    SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>> + 'static,
+{
     pub fn start(
-        chain: ChainConfig,
         db: Box<dyn ExecutionDb>,
         executor: Box<dyn BlockExecutor>,
     ) -> (Self, broadcast::Receiver<ExecutionEvent>) {
-        let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         let event_tx_clone = event_tx.clone();
         let handle = tokio::spawn(async move {
-            runloop_monad(chain, db, executor, cmd_rx, event_tx_clone).await;
+            runloop_monad::<ST, SCT>(db, executor, cmd_rx, event_tx_clone).await;
         });
 
         let engine = Self {
@@ -43,7 +48,7 @@ impl ExecutionEngine {
         (engine, event_rx)
     }
 
-    pub fn command_sender(&self) -> mpsc::Sender<ExecutionCommand> {
+    pub fn command_sender(&self) -> mpsc::UnboundedSender<ExecutionCommand<ST, SCT>> {
         self.cmd_tx.clone()
     }
 
@@ -56,7 +61,7 @@ impl ExecutionEngine {
     }
 
     pub async fn shutdown(mut self) {
-        let _ = self.cmd_tx.send(ExecutionCommand::Shutdown).await;
+        let _ = self.cmd_tx.send(ExecutionCommand::Shutdown);
         if let Some(handle) = self.handle.take() {
             let _ = handle.await;
         }

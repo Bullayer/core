@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 
-use alloy_primitives::B256;
+use monad_types::{BlockId, SeqNum};
 
 use crate::types::StateDeltas;
 
@@ -16,11 +16,11 @@ use super::types::Deletion;
 
 const MAX_ENTRIES: usize = 43200;
 const MAX_DELETIONS: usize = 2_000_000;
-const INVALID_BLOCK_NUM: u64 = u64::MAX;
+const INVALID_SEQ_NUM: SeqNum = SeqNum::MAX;
 
 /// Entry in the entries ring buffer.
 struct FinalizedEntry {
-    block_number: u64,
+    seq_num: SeqNum,
     idx: usize,
     size: usize,
 }
@@ -28,8 +28,8 @@ struct FinalizedEntry {
 /// Finalized deletions stored in a circular buffer.
 /// Closely mirrors C++ FinalizedDeletions with fixed-size arrays and circular pointers.
 pub struct FinalizedDeletions {
-    start_block_number: u64,
-    end_block_number: u64,
+    start_seq_num: SeqNum,
+    end_seq_num: SeqNum,
     entries: Vec<Option<FinalizedEntry>>,
     deletions: Vec<Deletion>,
     free_start: usize,
@@ -48,8 +48,8 @@ impl FinalizedDeletions {
         );
 
         Self {
-            start_block_number: INVALID_BLOCK_NUM,
-            end_block_number: INVALID_BLOCK_NUM,
+            start_seq_num: INVALID_SEQ_NUM,
+            end_seq_num: INVALID_SEQ_NUM,
             entries: (0..MAX_ENTRIES).map(|_| None).collect(),
             deletions,
             free_start: 0,
@@ -61,7 +61,7 @@ impl FinalizedDeletions {
         self.free_end - self.free_start
     }
 
-    fn set_entry(&mut self, i: usize, block_number: u64, deletions: &[Deletion]) {
+    fn set_entry(&mut self, i: usize, seq_num: SeqNum, deletions: &[Deletion]) {
         let offset = self.free_start;
         let count = deletions.len();
         for (j, deletion) in deletions.iter().enumerate() {
@@ -69,7 +69,7 @@ impl FinalizedDeletions {
         }
         self.free_start += count;
         self.entries[i] = Some(FinalizedEntry {
-            block_number,
+            seq_num,
             idx: offset,
             size: count,
         });
@@ -77,76 +77,76 @@ impl FinalizedDeletions {
 
     fn clear_entry(&mut self, i: usize) {
         if let Some(entry) = &self.entries[i] {
-            if entry.block_number == INVALID_BLOCK_NUM {
+            if entry.seq_num == INVALID_SEQ_NUM {
                 return;
             }
             assert_eq!(
-                entry.block_number, self.start_block_number,
-                "clear_entry: expected start_block_number={}, got={}",
-                self.start_block_number, entry.block_number
+                entry.seq_num, self.start_seq_num,
+                "clear_entry: expected start_seq_num={}, got={}",
+                self.start_seq_num, entry.seq_num
             );
             self.free_end += entry.size;
-            self.start_block_number += 1;
+            self.start_seq_num = self.start_seq_num + SeqNum(1);
         }
         self.entries[i] = None;
     }
 
     /// Write deletions for a finalized block.
     /// C++ FinalizedDeletions::write (statesync_server_context.cpp L172-213).
-    pub fn write(&mut self, block_number: u64, deletions: Vec<Deletion>) {
-        assert_ne!(block_number, INVALID_BLOCK_NUM);
+    pub fn write(&mut self, seq_num: SeqNum, deletions: Vec<Deletion>) {
+        assert_ne!(seq_num, INVALID_SEQ_NUM);
         assert!(
-            self.end_block_number == INVALID_BLOCK_NUM
-                || self.end_block_number + 1 == block_number,
-            "write: expected sequential block_number, end={}, got={}",
-            self.end_block_number,
-            block_number
+            self.end_seq_num == INVALID_SEQ_NUM
+                || self.end_seq_num + SeqNum(1) == seq_num,
+            "write: expected sequential seq_num, end={}, got={}",
+            self.end_seq_num,
+            seq_num
         );
 
-        self.end_block_number = block_number;
+        self.end_seq_num = seq_num;
 
         if deletions.len() > MAX_DELETIONS {
             tracing::warn!(
-                block_number,
+                seq_num = seq_num.0,
                 size = deletions.len(),
                 "dropping deletions due to excessive size"
             );
             for i in 0..MAX_ENTRIES {
                 self.clear_entry(i);
             }
-            self.start_block_number = INVALID_BLOCK_NUM;
+            self.start_seq_num = INVALID_SEQ_NUM;
             assert_eq!(self.free_deletions(), MAX_DELETIONS);
             return;
         }
 
-        if self.start_block_number == INVALID_BLOCK_NUM {
-            self.start_block_number = self.end_block_number;
+        if self.start_seq_num == INVALID_SEQ_NUM {
+            self.start_seq_num = self.end_seq_num;
         }
 
-        let target_idx = self.end_block_number as usize % MAX_ENTRIES;
+        let target_idx = self.end_seq_num.0 as usize % MAX_ENTRIES;
         self.clear_entry(target_idx);
 
         while self.free_deletions() < deletions.len() {
             assert!(
-                self.start_block_number < self.end_block_number,
+                self.start_seq_num < self.end_seq_num,
                 "no space but start >= end"
             );
-            let idx = self.start_block_number as usize % MAX_ENTRIES;
+            let idx = self.start_seq_num.0 as usize % MAX_ENTRIES;
             self.clear_entry(idx);
         }
 
-        self.set_entry(target_idx, self.end_block_number, &deletions);
+        self.set_entry(target_idx, self.end_seq_num, &deletions);
     }
 
-    /// Iterate deletions for a specific block number.
-    /// Returns false if block_number not found (C++ returns false).
-    pub fn for_each<F>(&self, block_number: u64, mut f: F) -> bool
+    /// Iterate deletions for a specific seq_num.
+    /// Returns false if seq_num not found (C++ returns false).
+    pub fn for_each<F>(&self, seq_num: SeqNum, mut f: F) -> bool
     where
         F: FnMut(&Deletion),
     {
-        let idx = block_number as usize % MAX_ENTRIES;
+        let idx = seq_num.0 as usize % MAX_ENTRIES;
         if let Some(entry) = &self.entries[idx] {
-            if entry.block_number == block_number {
+            if entry.seq_num == seq_num {
                 for i in 0..entry.size {
                     let deletion_idx = (entry.idx + i) % MAX_DELETIONS;
                     f(&self.deletions[deletion_idx]);
@@ -170,8 +170,8 @@ pub struct ProposedDeletions {
 }
 
 struct ProposedEntry {
-    block_number: u64,
-    block_id: B256,
+    seq_num: SeqNum,
+    block_id: BlockId,
     deletions: Vec<Deletion>,
 }
 
@@ -182,9 +182,9 @@ impl ProposedDeletions {
         }
     }
 
-    pub fn push(&mut self, block_number: u64, block_id: B256, deletions: Vec<Deletion>) {
+    pub fn push(&mut self, seq_num: SeqNum, block_id: BlockId, deletions: Vec<Deletion>) {
         self.proposals.push_back(ProposedEntry {
-            block_number,
+            seq_num,
             block_id,
             deletions,
         });
@@ -195,8 +195,8 @@ impl ProposedDeletions {
     pub fn on_finalize(
         &mut self,
         finalized: &mut FinalizedDeletions,
-        block_number: u64,
-        block_id: B256,
+        seq_num: SeqNum,
+        block_id: BlockId,
     ) {
         if let Some(pos) = self
             .proposals
@@ -204,13 +204,12 @@ impl ProposedDeletions {
             .position(|p| p.block_id == block_id)
         {
             let entry = self.proposals.remove(pos).unwrap();
-            assert_eq!(entry.block_number, block_number);
-            finalized.write(block_number, entry.deletions);
+            assert_eq!(entry.seq_num, seq_num);
+            finalized.write(seq_num, entry.deletions);
         }
 
-        // GC proposals of older blocks than finalized block
         self.proposals
-            .retain(|p| p.block_number > block_number);
+            .retain(|p| p.seq_num > seq_num);
     }
 }
 
@@ -225,12 +224,10 @@ pub fn extract_deletions(state_deltas: &StateDeltas) -> Vec<Deletion> {
     let mut deletions = Vec::new();
 
     for (address, delta) in state_deltas {
-        // Storage-level deletions: old_val != 0, new_val == 0
-        // C++ checks this only when account exists (has_value)
         if delta.new_account.is_some() {
             for (key, storage_delta) in &delta.storage {
                 if storage_delta.old_value != storage_delta.new_value
-                    && storage_delta.new_value == B256::ZERO
+                    && storage_delta.new_value == alloy_primitives::B256::ZERO
                 {
                     deletions.push(Deletion {
                         address: *address,
@@ -240,15 +237,7 @@ pub fn extract_deletions(state_deltas: &StateDeltas) -> Vec<Deletion> {
             }
         }
 
-        // Account-level deletion: incarnation changed or account removed
-        // C++ checks: delta.account.first != account
         match (&delta.old_account, &delta.new_account) {
-            (Some(old), Some(new_acct)) if old.incarnation != new_acct.incarnation => {
-                deletions.push(Deletion {
-                    address: *address,
-                    key: None,
-                });
-            }
             (Some(_), None) => {
                 deletions.push(Deletion {
                     address: *address,
@@ -265,8 +254,13 @@ pub fn extract_deletions(state_deltas: &StateDeltas) -> Vec<Deletion> {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::Address;
+    use monad_crypto::hasher::Hash;
 
     use super::*;
+
+    fn test_block_id(v: u8) -> BlockId {
+        BlockId(Hash([v; 32]))
+    }
 
     #[test]
     fn test_finalized_deletions_write_and_read() {
@@ -279,17 +273,17 @@ mod tests {
             },
             Deletion {
                 address: addr,
-                key: Some(B256::from([2u8; 32])),
+                key: Some(alloy_primitives::B256::from([2u8; 32])),
             },
         ];
-        fd.write(100, deletions);
+        fd.write(SeqNum(100), deletions);
 
         let mut count = 0;
-        assert!(fd.for_each(100, |_| count += 1));
+        assert!(fd.for_each(SeqNum(100), |_| count += 1));
         assert_eq!(count, 2);
 
         let mut count = 0;
-        assert!(!fd.for_each(101, |_| count += 1));
+        assert!(!fd.for_each(SeqNum(101), |_| count += 1));
         assert_eq!(count, 0);
     }
 
@@ -298,15 +292,15 @@ mod tests {
         let mut fd = FinalizedDeletions::new();
         let addr = Address::from([1u8; 20]);
 
-        fd.write(100, vec![Deletion { address: addr, key: None }]);
-        fd.write(101, vec![Deletion { address: addr, key: Some(B256::from([2u8; 32])) }]);
+        fd.write(SeqNum(100), vec![Deletion { address: addr, key: None }]);
+        fd.write(SeqNum(101), vec![Deletion { address: addr, key: Some(alloy_primitives::B256::from([2u8; 32])) }]);
 
         let mut count = 0;
-        assert!(fd.for_each(100, |_| count += 1));
+        assert!(fd.for_each(SeqNum(100), |_| count += 1));
         assert_eq!(count, 1);
 
         count = 0;
-        assert!(fd.for_each(101, |_| count += 1));
+        assert!(fd.for_each(SeqNum(101), |_| count += 1));
         assert_eq!(count, 1);
     }
 
@@ -315,10 +309,10 @@ mod tests {
         let mut pd = ProposedDeletions::new();
         let mut fd = FinalizedDeletions::new();
 
-        let block_id = B256::from([1u8; 32]);
+        let block_id = test_block_id(1);
         let addr = Address::from([2u8; 20]);
         pd.push(
-            10,
+            SeqNum(10),
             block_id,
             vec![Deletion {
                 address: addr,
@@ -326,10 +320,10 @@ mod tests {
             }],
         );
 
-        pd.on_finalize(&mut fd, 10, block_id);
+        pd.on_finalize(&mut fd, SeqNum(10), block_id);
 
         let mut count = 0;
-        assert!(fd.for_each(10, |_| count += 1));
+        assert!(fd.for_each(SeqNum(10), |_| count += 1));
         assert_eq!(count, 1);
         assert!(pd.proposals.is_empty());
     }

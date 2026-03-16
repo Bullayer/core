@@ -27,7 +27,7 @@ use crate::types::{eth_json::MonadNotification, serialize::JsonSerialized};
 
 /// Cached block data from a BlockProposed event, reused across state transitions.
 struct ProposedBlock {
-    block_id: B256,
+    block_id: BlockId,
     header: alloy_rpc_types::Header,
     transactions: Vec<alloy_rpc_types::Transaction>,
     receipts: Vec<alloy_rpc_types::TransactionReceipt>,
@@ -44,7 +44,7 @@ impl EventServer {
         let tx = broadcast_tx.clone();
         let handle = tokio::spawn(async move {
             const MAX_PROPOSED_BLOCKS: usize = 64;
-            let mut proposed_blocks: HashMap<B256, Arc<ProposedBlock>> = HashMap::new();
+            let mut proposed_blocks: HashMap<BlockId, Arc<ProposedBlock>> = HashMap::new();
 
             loop {
                 let event = match event_rx.recv().await {
@@ -105,7 +105,7 @@ impl EventServer {
                                 BlockCommitState::Voted,
                             );
                         } else {
-                            warn!(%block_id, "BlockVoted for unknown block");
+                            warn!(?block_id, "BlockVoted for unknown block");
                         }
                     }
 
@@ -120,17 +120,12 @@ impl EventServer {
                                 BlockCommitState::Finalized,
                             );
                         } else {
-                            warn!(%block_id, "BlockFinalized for unknown block");
+                            warn!(?block_id, "BlockFinalized for unknown block");
                         }
                     }
 
-                    ExecutionEvent::BlockVerified { block_number } => {
-                        debug!(block_number, "BlockVerified event (no broadcast)");
-                    }
-
-                    ExecutionEvent::Gap => {
-                        proposed_blocks.clear();
-                        broadcast_event(&tx, EventServerEvent::Gap);
+                    ExecutionEvent::BlockVerified { seq_num } => {
+                        debug!(seq_num = seq_num.0, "BlockVerified event (no broadcast)");
                     }
                 }
             }
@@ -141,23 +136,17 @@ impl EventServer {
 }
 
 fn build_proposed_block(
-    block_id: B256,
-    header: &monad_execution_engine::types::BlockHeader,
-    transactions: &[monad_execution_engine::types::Transaction],
-    receipts: &[monad_execution_engine::types::Receipt],
+    block_id: BlockId,
+    header: &alloy_consensus::Header,
+    transactions: &[alloy_consensus::TxEnvelope],
+    receipts: &[alloy_consensus::ReceiptEnvelope],
     eth_block_hash: B256,
 ) -> ProposedBlock {
-    let alloy_header = convert_header(header, eth_block_hash);
-    let base_fee = alloy_header.inner.base_fee_per_gas;
+    let rpc_header = convert_header(header, eth_block_hash);
+    let base_fee = rpc_header.inner.base_fee_per_gas;
 
-    let alloy_txs = convert_transactions(
-        transactions,
-        eth_block_hash,
-        header.number,
-        base_fee,
-    );
-
-    let alloy_receipts = convert_receipts(
+    let rpc_txs = convert_transactions(transactions, eth_block_hash, header.number, base_fee);
+    let rpc_receipts = convert_receipts(
         transactions,
         receipts,
         eth_block_hash,
@@ -168,70 +157,45 @@ fn build_proposed_block(
 
     ProposedBlock {
         block_id,
-        header: alloy_header,
-        transactions: alloy_txs,
-        receipts: alloy_receipts,
+        header: rpc_header,
+        transactions: rpc_txs,
+        receipts: rpc_receipts,
     }
 }
 
 fn convert_header(
-    header: &monad_execution_engine::types::BlockHeader,
+    header: &alloy_consensus::Header,
     eth_block_hash: B256,
 ) -> alloy_rpc_types::Header {
-    let consensus_header = alloy_consensus::Header {
-        parent_hash: header.parent_hash,
-        ommers_hash: header.ommers_hash,
-        beneficiary: header.beneficiary,
-        state_root: header.state_root,
-        transactions_root: header.transactions_root,
-        receipts_root: header.receipts_root,
-        logs_bloom: alloy_primitives::Bloom::from(header.logs_bloom),
-        difficulty: alloy_primitives::U256::from(header.difficulty),
-        number: header.number,
-        gas_limit: header.gas_limit,
-        gas_used: header.gas_used,
-        timestamp: header.timestamp,
-        extra_data: alloy_primitives::Bytes::copy_from_slice(&header.extra_data),
-        mix_hash: header.mix_hash,
-        nonce: alloy_primitives::B64::from(header.nonce),
-        base_fee_per_gas: header.base_fee_per_gas,
-        withdrawals_root: header.withdrawals_root,
-        blob_gas_used: header.blob_gas_used.or(Some(0)),
-        excess_blob_gas: header.excess_blob_gas.or(Some(0)),
-        parent_beacon_block_root: header
-            .parent_beacon_block_root
-            .or(Some(alloy_primitives::B256::ZERO)),
-        requests_hash: header.requests_hash.or(Some(alloy_primitives::B256::ZERO)),
-    };
-
-    let size = consensus_header.size();
-
+    let size = header.size();
     alloy_rpc_types::Header {
         hash: eth_block_hash,
-        inner: consensus_header,
+        inner: header.clone(),
         total_difficulty: Some(alloy_primitives::U256::ZERO),
         size: Some(alloy_primitives::U256::from(size)),
     }
 }
 
 fn convert_transactions(
-    transactions: &[monad_execution_engine::types::Transaction],
+    transactions: &[alloy_consensus::TxEnvelope],
     block_hash: B256,
     block_number: u64,
     base_fee: Option<u64>,
 ) -> Vec<alloy_rpc_types::Transaction> {
+    use alloy_consensus::transaction::SignerRecoverable;
+
     transactions
         .iter()
         .enumerate()
         .map(|(tx_idx, tx)| {
-            let sender = senders.get(tx_idx).copied().unwrap_or_default();
-            let tx_envelope = decode_tx_envelope(&tx.data, tx.hash);
+            let sender = tx.recover_signer().unwrap_or_default();
             let effective_gas_price =
-                alloy_consensus::Transaction::effective_gas_price(&tx_envelope, base_fee);
+                alloy_consensus::Transaction::effective_gas_price(tx, base_fee);
 
             alloy_rpc_types::Transaction {
                 inner: alloy_consensus::transaction::Recovered::new_unchecked(
-                    tx_envelope, sender,
+                    tx.clone(),
+                    sender,
                 ),
                 block_hash: Some(block_hash),
                 block_number: Some(block_number),
@@ -242,141 +206,70 @@ fn convert_transactions(
         .collect()
 }
 
-fn decode_tx_envelope(data: &[u8], tx_hash: B256) -> alloy_consensus::TxEnvelope {
-    use alloy_rlp::Decodable;
-
-    if data.is_empty() {
-        return build_placeholder_tx_envelope(tx_hash);
-    }
-
-    match alloy_consensus::TxEnvelope::decode(&mut &data[..]) {
-        Ok(envelope) => envelope,
-        Err(_) => build_placeholder_tx_envelope(tx_hash),
-    }
-}
-
-fn build_placeholder_tx_envelope(tx_hash: B256) -> alloy_consensus::TxEnvelope {
-    let tx = alloy_consensus::TxLegacy {
-        chain_id: None,
-        nonce: 0,
-        gas_price: 0,
-        gas_limit: 0,
-        to: alloy_primitives::TxKind::Create,
-        value: alloy_primitives::U256::ZERO,
-        input: alloy_primitives::Bytes::new(),
-    };
-
-    alloy_consensus::TxEnvelope::Legacy(alloy_consensus::Signed::new_unchecked(
-        tx,
-        alloy_primitives::Signature::new(
-            alloy_primitives::U256::ZERO,
-            alloy_primitives::U256::ZERO,
-            false,
-        ),
-        tx_hash,
-    ))
-}
-
 fn convert_receipts(
-    transactions: &[monad_execution_engine::types::Transaction],
-    receipts: &[monad_execution_engine::types::Receipt],
+    transactions: &[alloy_consensus::TxEnvelope],
+    receipts: &[alloy_consensus::ReceiptEnvelope],
     block_hash: B256,
     block_number: u64,
     block_timestamp: u64,
     base_fee: Option<u64>,
 ) -> Vec<alloy_rpc_types::TransactionReceipt> {
+    use alloy_consensus::transaction::SignerRecoverable;
+
     let mut log_index = 0u64;
 
     receipts
         .iter()
         .enumerate()
-        .map(|(tx_idx, receipt)| {
+        .map(|(tx_idx, receipt_envelope)| {
             let tx = transactions.get(tx_idx);
-            let tx_hash = tx.map(|t| t.hash).unwrap_or_default();
-            let sender = senders.get(tx_idx).copied().unwrap_or_default();
-            let tx_data = tx.map(|t| &t.data[..]).unwrap_or(&[]);
+            let tx_hash = tx.map(|t| *t.tx_hash()).unwrap_or_default();
+            let sender = tx
+                .and_then(|t| t.recover_signer().ok())
+                .unwrap_or_default();
 
-            let logs: Vec<alloy_rpc_types::Log> = receipt
-                .logs
-                .iter()
-                .map(|log| {
-                    let alloy_log = alloy_rpc_types::Log {
-                        inner: alloy_primitives::Log {
-                            address: log.address,
-                            data: alloy_primitives::LogData::new_unchecked(
-                                log.topics.clone(),
-                                alloy_primitives::Bytes::copy_from_slice(&log.data),
-                            ),
-                        },
-                        block_hash: Some(block_hash),
-                        block_number: Some(block_number),
-                        block_timestamp: Some(block_timestamp),
-                        transaction_hash: Some(tx_hash),
-                        transaction_index: Some(tx_idx as u64),
-                        log_index: Some(log_index),
-                        removed: false,
-                    };
-                    log_index += 1;
-                    alloy_log
-                })
-                .collect();
+            let rpc_receipt_envelope = map_receipt_envelope(
+                receipt_envelope.clone(),
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx as u64,
+                &mut log_index,
+            );
 
-            let logs_bloom = alloy_primitives::logs_bloom(logs.iter().map(|l| &l.inner));
-
-            let receipt_with_bloom = alloy_consensus::ReceiptWithBloom {
-                receipt: alloy_consensus::Receipt {
-                    status: alloy_consensus::Eip658Value::Eip658(receipt.status),
-                    cumulative_gas_used: receipt.cumulative_gas_used,
-                    logs,
-                },
-                logs_bloom,
-            };
-
-            let tx_envelope = decode_tx_envelope(tx_data, tx_hash);
-
-            let receipt_envelope = match &tx_envelope {
-                alloy_consensus::TxEnvelope::Eip2930(_) => {
-                    alloy_consensus::ReceiptEnvelope::Eip2930(receipt_with_bloom)
-                }
-                alloy_consensus::TxEnvelope::Eip1559(_) => {
-                    alloy_consensus::ReceiptEnvelope::Eip1559(receipt_with_bloom)
-                }
-                alloy_consensus::TxEnvelope::Eip4844(_) => {
-                    alloy_consensus::ReceiptEnvelope::Eip4844(receipt_with_bloom)
-                }
-                alloy_consensus::TxEnvelope::Eip7702(_) => {
-                    alloy_consensus::ReceiptEnvelope::Eip7702(receipt_with_bloom)
-                }
-                _ => alloy_consensus::ReceiptEnvelope::Legacy(receipt_with_bloom),
-            };
-
+            let inner_receipt = receipt_envelope.as_receipt().expect("valid receipt");
+            let cumulative_gas_used = inner_receipt.cumulative_gas_used;
             let gas_used = if tx_idx > 0 {
-                receipt
-                    .cumulative_gas_used
-                    .saturating_sub(
-                        receipts
-                            .get(tx_idx - 1)
-                            .map(|r| r.cumulative_gas_used)
-                            .unwrap_or(0),
-                    )
+                let prev_cumulative = receipts
+                    .get(tx_idx - 1)
+                    .and_then(|r| r.as_receipt())
+                    .map(|r| r.cumulative_gas_used)
+                    .unwrap_or(0);
+                cumulative_gas_used.saturating_sub(prev_cumulative)
             } else {
-                receipt.cumulative_gas_used
+                cumulative_gas_used
             };
 
-            let effective_gas_price =
-                alloy_consensus::Transaction::effective_gas_price(&tx_envelope, base_fee);
+            let effective_gas_price = tx
+                .map(|t| alloy_consensus::Transaction::effective_gas_price(t, base_fee))
+                .unwrap_or(0);
 
-            let to = alloy_consensus::Transaction::to(&tx_envelope);
-            let (to, contract_address) = match to {
-                Some(addr) => (Some(addr), None),
-                None => {
-                    let nonce = alloy_consensus::Transaction::nonce(&tx_envelope);
-                    (None, Some(sender.create(nonce)))
+            let (to, contract_address) = if let Some(t) = tx {
+                let to_addr = alloy_consensus::Transaction::to(t);
+                match to_addr {
+                    Some(addr) => (Some(addr), None),
+                    None => {
+                        let nonce = alloy_consensus::Transaction::nonce(t);
+                        (None, Some(sender.create(nonce)))
+                    }
                 }
+            } else {
+                (None, None)
             };
 
             alloy_rpc_types::TransactionReceipt {
-                inner: receipt_envelope,
+                inner: rpc_receipt_envelope,
                 transaction_hash: tx_hash,
                 transaction_index: Some(tx_idx as u64),
                 block_hash: Some(block_hash),
@@ -393,12 +286,119 @@ fn convert_receipts(
         .collect()
 }
 
+fn map_receipt_envelope(
+    envelope: alloy_consensus::ReceiptEnvelope,
+    block_hash: B256,
+    block_number: u64,
+    block_timestamp: u64,
+    tx_hash: B256,
+    tx_idx: u64,
+    log_index: &mut u64,
+) -> alloy_consensus::ReceiptEnvelope<alloy_rpc_types::Log> {
+    fn map_rwb(
+        rwb: alloy_consensus::ReceiptWithBloom<alloy_consensus::Receipt>,
+        block_hash: B256,
+        block_number: u64,
+        block_timestamp: u64,
+        tx_hash: B256,
+        tx_idx: u64,
+        log_index: &mut u64,
+    ) -> alloy_consensus::ReceiptWithBloom<alloy_consensus::Receipt<alloy_rpc_types::Log>> {
+        let rpc_logs = rwb
+            .receipt
+            .logs
+            .into_iter()
+            .map(|log| {
+                let rpc_log = alloy_rpc_types::Log {
+                    inner: log,
+                    block_hash: Some(block_hash),
+                    block_number: Some(block_number),
+                    block_timestamp: Some(block_timestamp),
+                    transaction_hash: Some(tx_hash),
+                    transaction_index: Some(tx_idx),
+                    log_index: Some(*log_index),
+                    removed: false,
+                };
+                *log_index += 1;
+                rpc_log
+            })
+            .collect();
+
+        alloy_consensus::ReceiptWithBloom {
+            receipt: alloy_consensus::Receipt {
+                status: rwb.receipt.status,
+                cumulative_gas_used: rwb.receipt.cumulative_gas_used,
+                logs: rpc_logs,
+            },
+            logs_bloom: rwb.logs_bloom,
+        }
+    }
+
+    match envelope {
+        alloy_consensus::ReceiptEnvelope::Legacy(rwb) => {
+            alloy_consensus::ReceiptEnvelope::Legacy(map_rwb(
+                rwb,
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx,
+                log_index,
+            ))
+        }
+        alloy_consensus::ReceiptEnvelope::Eip2930(rwb) => {
+            alloy_consensus::ReceiptEnvelope::Eip2930(map_rwb(
+                rwb,
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx,
+                log_index,
+            ))
+        }
+        alloy_consensus::ReceiptEnvelope::Eip1559(rwb) => {
+            alloy_consensus::ReceiptEnvelope::Eip1559(map_rwb(
+                rwb,
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx,
+                log_index,
+            ))
+        }
+        alloy_consensus::ReceiptEnvelope::Eip4844(rwb) => {
+            alloy_consensus::ReceiptEnvelope::Eip4844(map_rwb(
+                rwb,
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx,
+                log_index,
+            ))
+        }
+        alloy_consensus::ReceiptEnvelope::Eip7702(rwb) => {
+            alloy_consensus::ReceiptEnvelope::Eip7702(map_rwb(
+                rwb,
+                block_hash,
+                block_number,
+                block_timestamp,
+                tx_hash,
+                tx_idx,
+                log_index,
+            ))
+        }
+    }
+}
+
 fn broadcast_block_updates(
     broadcast_tx: &broadcast::Sender<EventServerEvent>,
     block: &ProposedBlock,
     commit_state: BlockCommitState,
 ) {
-    let block_id = BlockId(monad_types::Hash(block.block_id.0));
+    let block_id = block.block_id;
 
     let serialized_monad_header = JsonSerialized::new_shared_with_map(
         MonadNotification {

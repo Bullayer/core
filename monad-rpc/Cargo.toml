@@ -24,6 +24,7 @@ jemallocator = ["tikv-jemallocator", "monad-pprof/jemallocator"]
 [dependencies]
 monad-archive = { workspace = true }
 monad-chain-config = { workspace = true }
+monad-crypto = { workspace = true }
 monad-eth-txpool-ipc = { workspace = true }
 monad-eth-txpool-types = { workspace = true }
 monad-eth-types = { workspace = true }
@@ -42,7 +43,7 @@ actix-http = { workspace = true }
 actix-rt = { workspace = true }
 actix-web = { workspace = true }
 actix-ws = { workspace = true }
-alloy-consensus = { workspace = true }
+alloy-consensus = { workspace = true, features = ["k256"] }
 alloy-eips = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
