@@ -17,6 +17,7 @@ pub mod chainstate;
 pub mod cli;
 pub mod comparator;
 pub mod docs;
+pub mod eth_call_handler;
 pub mod event;
 pub mod handlers;
 pub mod middleware;
@@ -62,10 +63,6 @@ pub async fn start_rpc_server(
     txpool_bridge_client: Option<EthTxPoolBridgeClient>,
     execution_event_rx: Option<tokio::sync::broadcast::Receiver<ExecutionEvent>>,
 ) -> std::io::Result<()> {
-    let concurrent_requests_limiter = Arc::new(tokio::sync::Semaphore::new(
-        args.eth_call_max_concurrent_requests as usize,
-    ));
-
     let triedb_env = args.triedb_path.clone().as_deref().map(|path| {
         TriedbEnv::new(
             path,
@@ -256,19 +253,28 @@ pub async fn start_rpc_server(
         .as_ref()
         .map(|endpoint| RpcComparator::new(endpoint.to_string(), node_name));
 
+
+    let eth_call_handler = eth_call_executor.map(|executor| {
+        EthCallHandler::new(
+            EthCallHandlerConfig {
+                enable_stats: args.enable_admin_eth_call_statistics,
+                executor_fibers: args.eth_call_executor_fibers as usize,
+                max_concurrent_permits: args.eth_call_max_concurrent_requests as usize,
+            },
+            executor,
+        )
+    });
+
     let app_state = MonadRpcResources::new(
         txpool_bridge_client,
         triedb_env,
-        eth_call_executor,
-        args.eth_call_executor_fibers as usize,
+        eth_call_handler,
         archive_reader,
         chain_id,
         chain_state,
         args.batch_request_limit,
         args.max_response_size,
         args.allow_unprotected_txs,
-        concurrent_requests_limiter,
-        args.eth_call_max_concurrent_requests as usize,
         args.eth_get_logs_max_block_range,
         args.eth_call_provider_gas_limit,
         args.eth_estimate_gas_provider_gas_limit,
@@ -277,7 +283,6 @@ pub async fn start_rpc_server(
         args.dry_run_get_logs_index,
         args.use_eth_get_logs_index,
         args.max_finalized_block_cache_len,
-        args.enable_admin_eth_call_statistics,
         with_metrics.clone(),
         rpc_comparator.clone(),
     );
