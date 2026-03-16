@@ -181,19 +181,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
 
     _ = std::fs::remove_file(node_state.mempool_ipc_path.as_path());
     _ = std::fs::remove_file(node_state.control_panel_ipc_path.as_path());
-    _ = std::fs::remove_file(node_state.statesync_ipc_path.as_path());
-
-    // FIXME this is super jank... we should always just pass the 1 file in monad-node
-    let mut statesync_triedb_path = node_state.triedb_path.clone();
-    if let Ok(files) = std::fs::read_dir(&statesync_triedb_path) {
-        let mut files: Vec<_> = files.collect();
-        assert_eq!(files.len(), 1, "nothing in triedb path");
-        statesync_triedb_path = files
-            .pop()
-            .unwrap()
-            .expect("failed to read triedb path")
-            .path();
-    }
 
     let mut bootstrap_nodes = Vec::new();
     for peer_config in &node_state.node_config.bootstrap.peers {
@@ -228,10 +215,12 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         }
     });
 
-    let (execution_engine, execution_event_rx) =
+    let traversable_db = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let (execution_engine, execution_event_rx, statesync_provider) =
         ExecutionEngine::<SignatureType, SignatureCollectionType>::start(
             Box::new(InMemoryExecutionDb::new()),
             Box::new(MockBlockExecutor::new()),
+            traversable_db,
         );
 
     let mut executor = ParentExecutor {
@@ -280,7 +269,7 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             let rpc_chain_id = node_state.node_config.chain_id;
 
             let node_config_str = node_state.node_config_path.display().to_string();
-            let triedb_str = statesync_triedb_path.display().to_string();
+            let triedb_str = node_state.triedb_path.display().to_string();
             let rpc_port_str = node_state.rpc_port.to_string();
             let ws_port_str = node_state.rpc_ws_port.to_string();
             let worker_threads_str = node_state.rpc_worker_threads.to_string();
@@ -332,8 +321,8 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         .expect("uds bind failed"),
         loopback: LoopbackExecutor::default(),
         state_sync: StateSync::<SignatureType, SignatureCollectionType>::new(
-            vec![statesync_triedb_path.to_string_lossy().to_string()],
-            node_state.statesync_sq_thread_cpu,
+            Box::new(InMemoryExecutionDb::new()),
+            statesync_provider,
             state_sync_init_peers,
             node_state
                 .node_config
@@ -341,11 +330,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
                 .into(),
             STATESYNC_REQUEST_TIMEOUT,
             STATESYNC_REQUEST_TIMEOUT,
-            node_state
-                .statesync_ipc_path
-                .to_str()
-                .expect("invalid file name")
-                .to_owned(),
         ),
         config_loader: ConfigLoader::new(node_state.node_config_path),
     };

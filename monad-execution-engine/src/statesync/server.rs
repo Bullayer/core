@@ -98,11 +98,11 @@ fn send_deletions(
                     ));
                 }
                 Some(key) => {
-                    // C++ encodes storage key with rlp::encode_bytes32_compact
-                    // For now, encode as raw addr + key bytes
-                    let mut data = Vec::with_capacity(20 + 32);
+                    let compact_key =
+                        super::protocol::encode_bytes32_compact(&key.0);
+                    let mut data = Vec::with_capacity(20 + compact_key.len());
                     data.extend_from_slice(deletion.address.as_slice());
-                    data.extend_from_slice(key.as_slice());
+                    data.extend_from_slice(&compact_key);
                     upserts.push((SyncUpsertType::StorageDelete, data));
                 }
             }

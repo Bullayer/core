@@ -11,7 +11,7 @@ use futures::channel::oneshot;
 use monad_crypto::certificate_signature::PubKey;
 use monad_execution_engine::statesync::{StateSyncProvider, StateSyncRequest as EngineRequest};
 use monad_executor_glue::{
-    StateSyncNetworkMessage, StateSyncRequest, StateSyncResponse, StateSyncUpsertType,
+    StateSyncNetworkMessage, StateSyncResponse, StateSyncUpsertType,
     StateSyncUpsertV1, SELF_STATESYNC_VERSION,
 };
 use monad_types::NodeId;

@@ -39,7 +39,7 @@ use monad_eth_types::EthExecutionProtocol;
 use monad_execution_engine::command::ExecutionCommand;
 use monad_executor::{Executor, ExecutorMetrics, ExecutorMetricsChain};
 use monad_executor_glue::{BlockSyncEvent, LedgerCommand, MonadEvent};
-use monad_types::{BlockId, FinalizedHeader, GENESIS_ROUND, Round, SeqNum};
+use monad_types::{BlockId, GENESIS_ROUND, Round, SeqNum};
 use monad_validator::signature_collection::SignatureCollection;
 use tracing::{info, trace, warn};
 

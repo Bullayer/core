@@ -77,8 +77,9 @@ async fn test_propose_execute_finalize_flow() {
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
 
-    let (engine, mut event_rx) =
-        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
+    let traversable = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let (engine, mut event_rx, _provider) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor, traversable);
     let cmd_tx = engine.command_sender();
 
     let block = make_consensus_block(1, 1);
@@ -153,8 +154,9 @@ async fn test_multiple_blocks_sequential() {
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
 
-    let (engine, mut event_rx) =
-        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
+    let traversable = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let (engine, mut event_rx, _provider) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor, traversable);
     let cmd_tx = engine.command_sender();
 
     for i in 1..=3u64 {
@@ -289,8 +291,9 @@ async fn test_graceful_shutdown() {
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
 
-    let (engine, _event_rx) =
-        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
+    let traversable = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let (engine, _event_rx, _provider) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor, traversable);
 
     tokio::time::timeout(Duration::from_secs(5), engine.shutdown())
         .await
@@ -338,6 +341,7 @@ async fn test_in_memory_db_state() {
             old_account: None,
             new_account: Some(account.clone()),
             storage: storage_deltas,
+            ..Default::default()
         },
     );
 
@@ -370,8 +374,9 @@ async fn test_multiple_event_subscribers() {
     let db = Box::new(InMemoryExecutionDb::new());
     let executor = Box::new(MockBlockExecutor::new());
 
-    let (engine, mut rx1) =
-        ExecutionEngine::<TestST, TestSCT>::start(db, executor);
+    let traversable = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let (engine, mut rx1, _provider) =
+        ExecutionEngine::<TestST, TestSCT>::start(db, executor, traversable);
     let mut rx2 = engine.subscribe_events();
     let cmd_tx = engine.command_sender();
 

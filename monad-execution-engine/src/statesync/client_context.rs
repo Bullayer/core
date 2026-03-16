@@ -10,6 +10,7 @@ use super::protocol::SyncProtocolState;
 use super::types::{SyncDone, SyncUpsertType};
 use super::{StateSyncApplier, StateSyncApplierDb, StateSyncBatch};
 use alloy_consensus::Header;
+use alloy_rlp::Encodable;
 use crate::validation::compute_block_hash;
 
 const NUM_PREFIXES: usize = 256;
@@ -73,6 +74,14 @@ impl StateSyncClientContext {
         }
 
         self.db.apply_batch(batch, self.current);
+
+        // C++ statesync_client_context.cpp L165-175: write target block header to trie
+        if let Some(ref target) = self.target {
+            let mut header_rlp = Vec::new();
+            target.encode(&mut header_rlp);
+            self.db.write_block_header(target.number, &header_rlp);
+        }
+
         self.protocol.clear_commit_flag();
     }
 
@@ -117,6 +126,10 @@ impl StateSyncApplier for StateSyncClientContext {
 
     fn set_target(&mut self, target_header: &Header) {
         assert_ne!(target_header.number, INVALID_BLOCK_NUM);
+        assert_ne!(
+            target_header.number, 0,
+            "genesis should not use statesync"
+        );
         if let Some(ref old) = self.target {
             assert!(target_header.number >= old.number);
         }
@@ -166,9 +179,15 @@ impl StateSyncApplier for StateSyncClientContext {
             _ => return false,
         };
 
-        self.progress
-            .iter()
-            .all(|(progress, _)| *progress == target_number)
+        self.progress.iter().all(|(progress, _)| {
+            assert!(
+                *progress == INVALID_BLOCK_NUM || *progress <= target_number,
+                "prefix progress {} exceeds target {}",
+                progress,
+                target_number
+            );
+            *progress == target_number
+        })
     }
 
     /// Finalize sync session.
@@ -227,6 +246,24 @@ impl StateSyncApplier for StateSyncClientContext {
                 break;
             }
         }
+
+        // C++ statesync_client.cpp L179-214: persist historical headers after validation
+        let mut headers_to_write = Vec::new();
+        {
+            let mut rlp_buf = Vec::new();
+            target.encode(&mut rlp_buf);
+            headers_to_write.push((target.number, rlp_buf));
+        }
+        for i in 0..num_headers {
+            let version = target.number - i - 1;
+            let idx = version as usize % 256;
+            if let Some(ref hdr) = self.protocol.headers[idx] {
+                let mut rlp_buf = Vec::new();
+                hdr.encode(&mut rlp_buf);
+                headers_to_write.push((version, rlp_buf));
+            }
+        }
+        self.db.write_block_headers(&headers_to_write);
 
         // C++ L221: verify state root matches target
         let state_root = self.db.state_root();

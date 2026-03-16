@@ -5968,11 +5968,9 @@ version = "0.1.0"
 dependencies = [
  "alloy-consensus",
  "alloy-rlp",
- "bindgen",
  "criterion",
  "futures",
  "monad-crypto",
- "monad-cxx",
  "monad-eth-types",
  "monad-execution-engine",
  "monad-executor",

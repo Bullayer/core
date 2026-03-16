@@ -17,32 +17,27 @@ use std::{
     marker::PhantomData,
     ops::DerefMut,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll, Waker},
     time::Duration,
 };
 
-use ffi::SyncRequest;
 use futures::{Stream, StreamExt};
-use ipc::StateSyncIpc;
+use in_process_server::InProcessStateSyncServer;
 use monad_crypto::certificate_signature::{
     CertificateSignaturePubKey, CertificateSignatureRecoverable, PubKey,
 };
 use monad_eth_types::EthExecutionProtocol;
+use monad_execution_engine::statesync::{StateSyncApplierDb, StateSyncProvider};
 use monad_executor::{Executor, ExecutorMetrics, ExecutorMetricsChain};
 use monad_executor_glue::{MonadEvent, StateSyncCommand, StateSyncEvent, StateSyncNetworkMessage};
 use monad_types::{NodeId, SeqNum};
 use monad_validator::signature_collection::SignatureCollection;
+use rust_sync::RustStateSync;
 
-#[allow(dead_code, non_camel_case_types, non_upper_case_globals)]
-pub mod bindings {
-    include!(concat!(env!("OUT_DIR"), "/state_sync.rs"));
-}
-
-mod ffi;
 mod in_process_server;
-mod ipc;
 mod outbound_requests;
-mod rust_client;
+mod rust_sync;
 
 monad_executor::metric_consts! {
     GAUGE_STATESYNC_SYNCING {
@@ -75,12 +70,13 @@ monad_executor::metric_consts! {
     }
 }
 
+#[allow(dead_code)]
 pub struct StateSync<ST, SCT>
 where
     ST: CertificateSignatureRecoverable,
 {
     incoming_request_timeout: Duration,
-    uds_path: String,
+    provider: Arc<dyn StateSyncProvider>,
 
     mode: StateSyncMode<CertificateSignaturePubKey<ST>>,
 
@@ -94,23 +90,19 @@ where
     ST: CertificateSignatureRecoverable,
 {
     pub fn new(
-        db_paths: Vec<String>,
-        sq_thread_cpu: Option<u32>,
+        applier_db: Box<dyn StateSyncApplierDb>,
+        provider: Arc<dyn StateSyncProvider>,
         state_sync_init_peers: Vec<NodeId<CertificateSignaturePubKey<ST>>>,
         max_parallel_requests: usize,
         request_timeout: Duration,
         incoming_request_timeout: Duration,
-        uds_path: String,
     ) -> Self {
-        monad_cxx::init_cxx_logging(tracing::Level::WARN);
-
         let mut this = Self {
             incoming_request_timeout,
-            uds_path,
+            provider,
 
-            mode: StateSyncMode::Sync(ffi::StateSync::start(
-                &db_paths,
-                sq_thread_cpu,
+            mode: StateSyncMode::Sync(RustStateSync::new(
+                applier_db,
                 &state_sync_init_peers,
                 max_parallel_requests,
                 request_timeout,
@@ -135,10 +127,8 @@ where
 }
 
 enum StateSyncMode<PT: PubKey> {
-    Sync(ffi::StateSync<PT>),
-    /// transitions to Live once the StartExecution command is executed
-    /// note that Live -> Sync is not a valid state transition
-    Live(StateSyncIpc<PT>),
+    Sync(RustStateSync<PT>),
+    Live(InProcessStateSyncServer<PT>),
 }
 
 impl<ST, SCT> Executor for StateSync<ST, SCT>
@@ -194,14 +184,14 @@ where
                     statesync.handle_bad_version(from, bad_version);
                 }
                 StateSyncCommand::Message((from, StateSyncNetworkMessage::Request(request))) => {
-                    let execution_ipc = match &mut self.mode {
+                    let server = match &mut self.mode {
                         StateSyncMode::Sync(_) => {
                             tracing::warn!(?from, "dropping statesync request, still syncing");
                             continue;
                         }
                         StateSyncMode::Live(live) => live,
                     };
-                    if execution_ipc
+                    if server
                         .request_tx
                         .try_send((from, StateSyncNetworkMessage::Request(request)))
                         .is_err()
@@ -213,14 +203,14 @@ where
                     from,
                     StateSyncNetworkMessage::Completion(completion),
                 )) => {
-                    let execution_ipc = match &mut self.mode {
+                    let server = match &mut self.mode {
                         StateSyncMode::Sync(_) => {
                             tracing::warn!(?from, "dropping statesync completion, still syncing");
                             continue;
                         }
                         StateSyncMode::Live(live) => live,
                     };
-                    if execution_ipc
+                    if server
                         .request_tx
                         .try_send((from, StateSyncNetworkMessage::Completion(completion)))
                         .is_err()
@@ -249,9 +239,8 @@ where
                         StateSyncMode::Live(_) => false,
                     };
                     assert!(valid_transition);
-                    self.mode = StateSyncMode::Live(StateSyncIpc::new(
-                        &self.uds_path,
-                        self.incoming_request_timeout,
+                    self.mode = StateSyncMode::Live(InProcessStateSyncServer::new(
+                        Arc::clone(&self.provider),
                     ));
                     if let Some(waker) = self.waker.take() {
                         waker.wake();
@@ -307,42 +296,43 @@ where
                 }
 
                 if let Poll::Ready(event) = sync.poll_next_unpin(cx) {
-                    let event = match event.expect("StateSyncMode::Sync event channel dropped") {
-                        SyncRequest::Request((servicer, request)) => {
+                    let event = match event.expect("RustStateSync event channel dropped") {
+                        rust_sync::SyncRequest::Request((servicer, request)) => {
                             tracing::debug!(?request, ?servicer, "sending request");
                             StateSyncEvent::Outbound(
                                 servicer,
                                 StateSyncNetworkMessage::Request(request),
-                                None, // we don't care about completions for requests
+                                None,
                             )
                         }
-                        SyncRequest::DoneSync(target) => {
+                        rust_sync::SyncRequest::DoneSync(target) => {
                             StateSyncEvent::DoneSync(SeqNum(target.number))
                         }
-                        SyncRequest::Completion((servicer, session_id)) => {
+                        rust_sync::SyncRequest::Completion((servicer, session_id)) => {
                             tracing::debug!(?servicer, "sending completion");
                             StateSyncEvent::Outbound(
                                 servicer,
                                 StateSyncNetworkMessage::Completion(session_id),
-                                None, // we don't care about completions for completions
+                                None,
                             )
                         }
                     };
                     return Poll::Ready(Some(MonadEvent::StateSyncEvent(event)));
                 }
             }
-            StateSyncMode::Live(execution_ipc) => {
+            StateSyncMode::Live(server) => {
                 this.metrics[GAUGE_STATESYNC_SERVER_PENDING_REQUESTS] =
-                    execution_ipc.pending_request_len() as u64
-                        + execution_ipc.is_servicing_request() as u64;
+                    server.pending_request_len() as u64
+                        + server.is_servicing_request() as u64;
                 this.metrics[GAUGE_STATESYNC_SERVER_NUM_SYNCDONE_SUCCESS] =
-                    execution_ipc.num_syncdone_success() as u64;
+                    server.num_syncdone_success() as u64;
                 this.metrics[GAUGE_STATESYNC_SERVER_NUM_SYNCDONE_FAILED] =
-                    execution_ipc.num_syncdone_failed() as u64;
+                    server.num_syncdone_failed() as u64;
                 this.metrics[GAUGE_STATESYNC_SERVER_TOTAL_SERVICE_TIME_US] =
-                    execution_ipc.total_service_time_us() as u64;
-                if let Poll::Ready(maybe_response) = execution_ipc.response_rx.poll_recv(cx) {
-                    let (to, message, completion) = maybe_response.expect("did StateSyncIpc die?");
+                    server.total_service_time_us() as u64;
+                if let Poll::Ready(maybe_response) = server.response_rx.poll_recv(cx) {
+                    let (to, message, completion) =
+                        maybe_response.expect("did InProcessStateSyncServer die?");
                     tracing::debug!(
                         ?to,
                         ?message,

@@ -59,8 +59,6 @@ pub struct NodeState {
     pub ledger_path: PathBuf,
     pub mempool_ipc_path: PathBuf,
     pub control_panel_ipc_path: PathBuf,
-    pub statesync_ipc_path: PathBuf,
-    pub statesync_sq_thread_cpu: Option<u32>,
     pub triedb_path: PathBuf,
     pub persisted_peers_path: PathBuf,
 
@@ -90,8 +88,8 @@ impl NodeState {
             mempool_ipc_path,
             triedb_path,
             control_panel_ipc_path,
-            statesync_ipc_path,
-            statesync_sq_thread_cpu,
+            statesync_ipc_path: _,
+            statesync_sq_thread_cpu: _,
             keystore_password,
             otel_endpoint,
             record_metrics_interval_seconds,
@@ -201,8 +199,6 @@ impl NodeState {
             triedb_path,
             mempool_ipc_path,
             control_panel_ipc_path,
-            statesync_ipc_path,
-            statesync_sq_thread_cpu,
 
             otel_endpoint_interval,
             pprof,

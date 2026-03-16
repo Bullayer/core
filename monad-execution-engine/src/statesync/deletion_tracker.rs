@@ -237,8 +237,16 @@ pub fn extract_deletions(state_deltas: &StateDeltas) -> Vec<Deletion> {
             }
         }
 
+        // C++ on_commit (statesync_server_context.cpp L66-73):
+        // Account deletion when: incarnation changed OR new account is None
         match (&delta.old_account, &delta.new_account) {
             (Some(_), None) => {
+                deletions.push(Deletion {
+                    address: *address,
+                    key: None,
+                });
+            }
+            (Some(_), Some(_)) if delta.incarnation_changed => {
                 deletions.push(Deletion {
                     address: *address,
                     key: None,

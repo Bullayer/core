@@ -19,6 +19,7 @@ use clap::{error::ErrorKind, ArgAction, CommandFactory, Parser, Subcommand};
 use eyre::{eyre, Result};
 use monad_archive::cli::{ArchiveArgs, BlockDataReaderArgs};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Cli {
     pub block_data_source: BlockDataReaderArgs,

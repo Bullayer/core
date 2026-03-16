@@ -246,4 +246,20 @@ impl StateSyncApplierDb for InMemoryExecutionDb {
     fn code_exists(&self, hash: &[u8; 32]) -> bool {
         self.code.contains_key(&B256::from_slice(hash))
     }
+
+    fn write_block_header(&mut self, version: u64, _header_rlp: &[u8]) {
+        // In mock: just track that we wrote this version's header
+        // Real implementation would write RLP to trie
+        if let Ok(header) =
+            <alloy_consensus::Header as alloy_rlp::Decodable>::decode(&mut &_header_rlp[..])
+        {
+            self.headers.insert(SeqNum(version), header);
+        }
+    }
+
+    fn write_block_headers(&mut self, headers: &[(u64, Vec<u8>)]) {
+        for (version, rlp) in headers {
+            self.write_block_header(*version, rlp);
+        }
+    }
 }

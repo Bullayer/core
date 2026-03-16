@@ -24,6 +24,7 @@ pub use alloy_rpc_client::ReqwestClient;
 pub use dashmap::{DashMap, DashSet};
 pub use eyre::{Context, ContextCompat, Result};
 pub use rand::prelude::*;
+pub use rand::rngs::SmallRng;
 pub use tokio::{
     sync::mpsc,
     time::{Duration, Instant, Interval},

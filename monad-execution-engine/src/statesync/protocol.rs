@@ -406,18 +406,33 @@ fn decode_storage_db(data: &[u8]) -> Option<([u8; 32], [u8; 32])> {
 }
 
 /// Decode storage key from compact encoding (for delete upserts).
+/// C++ uses rlp::decode_bytes32_compact: 1-byte length prefix + value bytes (no leading zeros).
 fn decode_storage_key(data: &[u8]) -> Option<[u8; 32]> {
-    if data.len() < 32 {
+    if data.is_empty() {
+        return None;
+    }
+    let len = data[0] as usize;
+    if len > 32 || data.len() < 1 + len {
         return None;
     }
     let mut key = [0u8; 32];
-    key.copy_from_slice(&data[..32]);
+    key[32 - len..].copy_from_slice(&data[1..1 + len]);
     Some(key)
 }
 
-fn decode_block_header_from_bytes(_data: &[u8]) -> Option<Header> {
-    // TODO: implement proper RLP decoding of block header
-    Some(Header::default())
+/// Encode a bytes32 value in compact form: 1-byte length prefix + value bytes (no leading zeros).
+/// Matches C++ rlp::encode_bytes32_compact.
+pub fn encode_bytes32_compact(value: &[u8; 32]) -> Vec<u8> {
+    let first_nonzero = value.iter().position(|&b| b != 0).unwrap_or(32);
+    let len = 32 - first_nonzero;
+    let mut out = Vec::with_capacity(1 + len);
+    out.push(len as u8);
+    out.extend_from_slice(&value[first_nonzero..]);
+    out
+}
+
+fn decode_block_header_from_bytes(data: &[u8]) -> Option<Header> {
+    <alloy_consensus::Header as alloy_rlp::Decodable>::decode(&mut &data[..]).ok()
 }
 
 fn keccak256_bytes(data: &[u8]) -> [u8; 32] {

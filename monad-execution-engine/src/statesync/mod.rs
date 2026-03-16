@@ -6,6 +6,7 @@ pub mod client_context;
 pub mod deletion_tracker;
 pub mod protocol;
 pub mod server;
+pub mod server_db;
 pub mod types;
 pub mod version;
 
@@ -54,6 +55,11 @@ pub trait StateSyncApplierDb: Send + Sync {
     fn finalize_statesync(&mut self, target: u64) -> bool;
     fn state_root(&self) -> [u8; 32];
     fn code_exists(&self, hash: &[u8; 32]) -> bool;
+    /// Write a single block header during commit (C++ statesync_client_context.cpp L165-175).
+    fn write_block_header(&mut self, version: u64, header_rlp: &[u8]);
+    /// Persist historical block headers after finalize hash chain validation
+    /// (C++ statesync_client.cpp L179-214).
+    fn write_block_headers(&mut self, headers: &[(u64, Vec<u8>)]);
 }
 
 pub use self::types::StateSyncRequest;
