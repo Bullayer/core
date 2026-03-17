@@ -34,7 +34,6 @@ use std::{sync::Arc, time::Duration};
 
 use actix_web::{web, App, HttpServer};
 use monad_archive::archive_reader::{redact_mongo_url, ArchiveReader};
-use monad_ethcall::EthCallExecutor;
 use monad_execution_engine::events::ExecutionEvent;
 use tracing::{debug, error, info, warn};
 use tracing_actix_web::TracingLogger;
@@ -50,6 +49,7 @@ use self::{
     },
     middleware::{DecompressionGuard, Metrics, TimingMiddleware},
     txpool::EthTxPoolBridgeClient,
+    eth_call_handler::{EthCallHandler, EthCallHandlerConfig},
 };
 use monad_triedb_utils::triedb_env::TriedbEnv;
 

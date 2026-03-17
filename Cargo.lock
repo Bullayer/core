@@ -6004,42 +6004,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monad-testground"
-version = "0.1.0"
-dependencies = [
- "clap",
- "futures-util",
- "monad-bls",
- "monad-chain-config",
- "monad-consensus-state",
- "monad-consensus-types",
- "monad-control-panel",
- "monad-crypto",
- "monad-dataplane",
- "monad-executor",
- "monad-executor-glue",
- "monad-node-config",
- "monad-peer-discovery",
- "monad-raptorcast",
- "monad-secp",
- "monad-state",
- "monad-state-backend",
- "monad-types",
- "monad-updaters",
- "monad-validator",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "rand 0.8.5",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "monad-testutil"
 version = "0.1.0"
 dependencies = [
@@ -9125,18 +9089,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-appender"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "786d480bce6247ab75f005b14ae1624ad978d3029d9113f0a22fa1ac773faeaf"
-dependencies = [
- "crossbeam-channel",
- "thiserror 2.0.18",
- "time",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "tracing-attributes"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9166,22 +9118,6 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
-dependencies = [
- "js-sys",
- "opentelemetry",
- "smallvec",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
- "web-time",
 ]
 
 [[package]]
