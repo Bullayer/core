@@ -245,7 +245,7 @@ pub async fn start_rpc_server(
 
     let chain_state = triedb_env
         .clone()
-        .map(|t| ChainState::new(event_buffer, t, archive_reader.clone()));
+        .map(|t| ChainState::new(event_buffer, t, archive_reader));
 
     let rpc_comparator: Option<RpcComparator> = args
         .rpc_comparison_endpoint
@@ -256,7 +256,6 @@ pub async fn start_rpc_server(
         txpool_bridge_client,
         triedb_env,
         eth_call_handler,
-        archive_reader,
         chain_id,
         chain_state,
         args.batch_request_limit,

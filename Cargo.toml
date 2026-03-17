@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["monad-*"]
-exclude = ["monad-execution", "monad-scripts", "monad-fuzz", "monad-testground"]
+exclude = ["monad-execution", "monad-scripts", "monad-fuzz", "monad-testground", "monad-peer-disc-swarm", "monad-debugger"]
 
 [profile.dev]
 opt-level = 1
