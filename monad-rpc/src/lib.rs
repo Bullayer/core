@@ -243,9 +243,7 @@ pub async fn start_rpc_server(
         None
     };
 
-    let chain_state = triedb_env
-        .clone()
-        .map(|t| ChainState::new(event_buffer, t, archive_reader));
+    let chain_state = triedb_env.clone().map(|t| ChainState::new(event_buffer, t, archive_reader.clone()));
 
     let rpc_comparator: Option<RpcComparator> = args
         .rpc_comparison_endpoint
@@ -254,7 +252,6 @@ pub async fn start_rpc_server(
 
     let app_state = MonadRpcResources::new(
         txpool_bridge_client,
-        triedb_env,
         eth_call_handler,
         chain_id,
         chain_state,
