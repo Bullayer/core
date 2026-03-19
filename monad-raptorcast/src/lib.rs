@@ -178,13 +178,10 @@ where
         }
         let self_id = NodeId::new(config.shared_key.pubkey());
         let is_dynamic_fullnode = matches!(secondary_mode, SecondaryRaptorCastModeConfig::Client);
-        debug!(
-            ?is_dynamic_fullnode, ?self_id, ?config.mtu, "RaptorCast::new",
-        );
+        debug!(?is_dynamic_fullnode, ?self_id, ?config.mtu, "RaptorCast::new");
 
         let dual_socket = auth::DualSocketHandle::new(
-            authenticated_socket
-                .map(|socket| auth::AuthenticatedSocketHandle::new(socket, auth_protocol)),
+            authenticated_socket.map(|socket| auth::AuthenticatedSocketHandle::new(socket, auth_protocol)),
             non_authenticated_socket,
         );
 
@@ -202,7 +199,7 @@ where
                 .raptor10_fullnode_redundancy_factor,
         )
         .expect("secondary raptor10_redundancy doesn't fit");
-        let secondary_message_builder = OwnedMessageBuilder::new(config.shared_key.clone())
+        let secondary_message_builder: packet::MessageBuilder<'_, ST> = OwnedMessageBuilder::new(config.shared_key.clone())
             .segment_size(segment_size)
             .group_id(GroupId::Primary(current_epoch))
             .redundancy(secondary_redundancy);

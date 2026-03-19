@@ -43,9 +43,7 @@ use zerocopy::IntoBytes;
 use super::{message_timeout, TcpConfig, TcpMsg, TcpMsgHdr, TCP_MESSAGE_LENGTH_LIMIT};
 use crate::addrlist::{Addrlist, Status};
 
-// These are per-peer limits.
 pub const QUEUED_MESSAGE_WARN_LIMIT: usize = 100;
-// should be higher than MAX_UNACKNOWLEDGED_RESPONSES
 pub const QUEUED_MESSAGE_LIMIT: usize = 150;
 pub const QUEUED_MESSAGE_BYTE_LIMIT: usize = 4 * 1024 * 1024;
 
@@ -168,7 +166,7 @@ impl TxState {
         addr: &SocketAddr,
         msg: TcpMsg,
     ) -> Option<(BoundedQueueReceiver, TxStatePeerHandle)> {
-        let mut ret = None;
+        let mut ret: Option<(BoundedQueueReceiver, TxStatePeerHandle)> = None;
 
         let mut inner_ref = self.inner.borrow_mut();
 
@@ -252,8 +250,8 @@ impl Drop for TxStatePeerHandle {
 }
 
 struct TxStateInner {
-    // There is a transmit connection task running for a given peer iff there is an
-    // entry for the peer address in this map.  Exiting the transmit connection task
+    // There is a transmit connection task running for a given peer if there is an
+    // entry for the peer address in this map. Exiting the transmit connection task
     // drops a TxStatePeerHandle which removes the entry from this map.
     peer_channels: BTreeMap<SocketAddr, BoundedQueueSender>,
 }

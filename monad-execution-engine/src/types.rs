@@ -19,7 +19,6 @@ pub struct AccountDelta {
     pub old_account: Option<EthAccount>,
     pub new_account: Option<EthAccount>,
     pub storage: HashMap<B256, StorageDelta>,
-    /// Set by executor when self-destruct + recreate detected (C++ incarnation change).
     pub incarnation_changed: bool,
 }
 

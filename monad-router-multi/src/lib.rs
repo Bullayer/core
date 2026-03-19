@@ -95,7 +95,6 @@ where
     where
         B: PeerDiscoveryAlgoBuilder<PeerDiscoveryAlgoType = PD>,
     {
-        // Peer discovery needs to be shared among primary and secondary
         let pdd = PeerDiscoveryDriver::new(peer_discovery_builder);
         let shared_pdd = Arc::new(Mutex::new(pdd));
 

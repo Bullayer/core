@@ -152,7 +152,7 @@ where
         }
 
         // Remove duplicate entries from always_ask_full_nodes, but making sure
-        // we maintain the original order/
+        // we maintain the original order
         info!(
             num_prio_full_nodes =? config.full_nodes_prioritized.len(),
             "RaptorCastSecondary initializing Publisher",
@@ -309,7 +309,7 @@ where
                 group.advance_invites(time_point, &self.scheduling_cfg, self.validator_node_id)
             {
                 trace!(
-                    ?out_msg,
+                    out_msg = %format!("{out_msg:?}"),
                     "RaptorCastSecondary step_until advanced invites and will send",
                 );
 
@@ -334,7 +334,7 @@ where
             let maybe_invites =
                 new_group.advance_invites(time_point, &self.scheduling_cfg, self.validator_node_id);
             trace!(
-                ?maybe_invites,
+                maybe_invites = %format!("{maybe_invites:?}"),
                 "RaptorCastSecondary step_until new_randomized group, will send:",
             );
             self.group_schedule.insert(new_group.start_round, new_group);
@@ -356,7 +356,7 @@ where
     // We've received a response from the candidate but won't send any message
     // back right away, but when we have enough responses to form a group.
     pub fn on_candidate_response(&mut self, msg: FullNodesGroupMessage<ST>) {
-        trace!(?msg, "RaptorCastSecondary received candidate response");
+        trace!(msg = %format!("{msg:?}"), "RaptorCastSecondary received candidate response");
         match msg {
             FullNodesGroupMessage::PrepareGroupResponse(response) => {
                 let candidate = response.node_id;
@@ -374,7 +374,7 @@ where
             }
             _ => {
                 debug!(
-                    ?msg,
+                    msg = %format!("{msg:?}"),
                     "RaptorCastSecondary publisher received \
                     unexpected message",
                 );
@@ -2239,7 +2239,6 @@ mod tests {
 
         // Get the scheduled group to inspect its full state
         let start_round = Round(8);
-        let group = v0_fsm.group_schedule.get(&start_round).unwrap();
 
         // The uninvited node sends a PrepareGroupResponse(accept=true).
         let uninvited_node = nid(14); // nid(14) was not in invitees

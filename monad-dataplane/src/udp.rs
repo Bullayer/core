@@ -88,8 +88,7 @@ impl PriorityQueues {
     fn pop_highest_priority(&mut self) -> Option<UdpMsg> {
         for (priority_idx, queue) in self.queues.iter_mut().enumerate() {
             if let Some(msg) = queue.pop_front() {
-                self.current_bytes[priority_idx] =
-                    self.current_bytes[priority_idx].saturating_sub(msg.payload.len());
+                self.current_bytes[priority_idx] = self.current_bytes[priority_idx].saturating_sub(msg.payload.len());
                 return Some(msg);
             }
         }

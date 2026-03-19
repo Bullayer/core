@@ -162,7 +162,7 @@ where
     ) {
         trace!(
             ?dest_node,
-            ?group_msg,
+            group_msg = %format!("{group_msg:?}"),
             "RaptorCastSecondary send_single_msg"
         );
         let router_msg: OutboundRouterMessage<OM, ST> =
@@ -192,7 +192,7 @@ where
     ) {
         trace!(
             ?dest_node_ids,
-            ?group_msg,
+            group_msg = %format!("{group_msg:?}"),
             "RaptorCastSecondary send_group_msg"
         );
         let group_msg = self.try_fill_name_records(group_msg, &dest_node_ids);
@@ -213,7 +213,7 @@ where
                     .unwrap()
                     .get_name_records()
             };
-            let mut filled_confirm_msg = confirm_msg.clone();
+            let mut filled_confirm_msg = Clone::clone(confirm_msg);
             filled_confirm_msg.name_records = Default::default();
             for node_id in dest_node_ids.iter() {
                 if let Some(name_record) = name_records.get(node_id) {
@@ -221,7 +221,7 @@ where
                 } else {
                     // Maybe can happen if peer discovery gets pruned just
                     // before sending a ConfirmGroup message.
-                    warn!( ?node_id, ?group_msg,
+                    warn!( ?node_id, group_msg = %format!("{group_msg:?}"),
                         "RaptorCastSecondary: No name record found for node_id when sending out ConfirmGroup message",
                     );
                 }
@@ -485,7 +485,7 @@ where
                                     .into(),
                                 ));
                             } else if num_mappings > 0 {
-                                warn!( ?confirm_msg, num_peers =? confirm_msg.peers.len(), num_name_recs =? confirm_msg.name_records.len(),
+                                warn!( confirm_msg = %format!("{confirm_msg:?}"), num_peers =? confirm_msg.peers.len(), num_name_recs =? confirm_msg.name_records.len(),
                                     "Number of peers does not match the number \
                                     of name records in ConfirmGroup message. \
                                     Skipping PeerDiscovery update"
