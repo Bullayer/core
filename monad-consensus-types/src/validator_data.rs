@@ -38,8 +38,7 @@ pub struct ValidatorSetDataWithEpoch<SCT: SignatureCollection> {
     pub validators: ValidatorSetData<SCT>,
 }
 
-/// ValidatorSetData is used by updaters to send validator set updates to
-/// MonadState
+/// ValidatorSetData is used by updaters to send validator set updates to MonadState
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ValidatorSetData<SCT: SignatureCollection>(

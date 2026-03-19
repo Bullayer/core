@@ -52,10 +52,6 @@ pub struct Cli {
     #[arg(long)]
     pub ledger_path: PathBuf,
 
-    /// Set a custom monad mempool ipc path
-    #[arg(long)]
-    pub mempool_ipc_path: PathBuf,
-
     /// Set the monad triedb path
     #[arg(long)]
     pub triedb_path: PathBuf,
@@ -63,10 +59,6 @@ pub struct Cli {
     /// Set a custom monad control panel ipc path
     #[arg(long)]
     pub control_panel_ipc_path: PathBuf,
-
-    /// Set a custom monad statesync ipc path
-    #[arg(long)]
-    pub statesync_ipc_path: PathBuf,
 
     /// Set the sq_thread_cpu for statesync client. None means SQPOLL mode is
     /// disabled

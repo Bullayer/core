@@ -14,6 +14,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use alloy_primitives::Address;
+use std::time::Duration;
 use monad_crypto::certificate_signature::{
     CertificateSignaturePubKey, CertificateSignatureRecoverable,
 };
@@ -51,13 +52,13 @@ pub struct NodeConfig<ST: CertificateSignatureRecoverable> {
     #[serde(deserialize_with = "deserialize_eth_address_from_str")]
     pub beneficiary: Address,
 
-    pub ipc_tx_batch_size: u32,
-    pub ipc_max_queued_batches: u8,
-    // must be <= ipc_max_queued_batches
-    pub ipc_queued_batches_watermark: u8,
+    // pub ipc_tx_batch_size: u32,
+    // pub ipc_max_queued_batches: u8,
+    // pub ipc_queued_batches_watermark: u8,
 
     pub statesync_threshold: u16,
     pub statesync_max_concurrent_requests: u8,
+    pub statesync_request_timeout: Duration,
 
     pub bootstrap: NodeBootstrapConfig<ST>,
     pub fullnode_dedicated: FullNodeConfig<CertificateSignaturePubKey<ST>>,
@@ -69,7 +70,6 @@ pub struct NodeConfig<ST: CertificateSignatureRecoverable> {
 
     pub fullnode_raptorcast: FullNodeRaptorCastConfig<CertificateSignaturePubKey<ST>>,
 
-    // TODO split network-wide configuration into separate file
     ////////////////////////////////
     // NETWORK-WIDE CONFIGURATION //
     ////////////////////////////////

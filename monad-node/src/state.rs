@@ -57,7 +57,6 @@ pub struct NodeState {
     pub validators_path: PathBuf,
     pub wal_path: PathBuf,
     pub ledger_path: PathBuf,
-    pub mempool_ipc_path: PathBuf,
     pub control_panel_ipc_path: PathBuf,
     pub triedb_path: PathBuf,
     pub persisted_peers_path: PathBuf,
@@ -85,10 +84,8 @@ impl NodeState {
             devnet_chain_config_override: maybe_devnet_chain_config_override_path,
             wal_path,
             ledger_path,
-            mempool_ipc_path,
             triedb_path,
             control_panel_ipc_path,
-            statesync_ipc_path: _,
             statesync_sq_thread_cpu: _,
             keystore_password,
             otel_endpoint,
@@ -114,13 +111,7 @@ impl NodeState {
             &secp_identity,
             hex::encode(secp_pubkey.bytes_compressed())
         );
-        // FIXME this is somewhat jank.. is there a better way?
-        let router_key = load_secp256k1_keypair(&secp_identity, keystore_password)?;
-        info!(
-            "Loaded router key from {:?}, pubkey=0x{}",
-            &secp_identity,
-            hex::encode(router_key.pubkey().bytes_compressed())
-        );
+        let router_key = secp_key.clone();
         let bls_key = load_bls12_381_keypair(&bls_identity, keystore_password)?;
         info!(
             "Loaded bls12_381 key from {:?}, pubkey=0x{}",
@@ -197,7 +188,6 @@ impl NodeState {
             wal_path,
             ledger_path,
             triedb_path,
-            mempool_ipc_path,
             control_panel_ipc_path,
 
             otel_endpoint_interval,

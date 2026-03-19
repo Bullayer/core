@@ -95,7 +95,6 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 const MONAD_NODE_VERSION: Option<&str> = option_env!("MONAD_VERSION");
-const STATESYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 const EXECUTION_DELAY: u64 = 3;
 
@@ -179,7 +178,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
 
     let statesync_threshold: usize = node_state.node_config.statesync_threshold.into();
 
-    _ = std::fs::remove_file(node_state.mempool_ipc_path.as_path());
     _ = std::fs::remove_file(node_state.control_panel_ipc_path.as_path());
 
     let mut bootstrap_nodes = Vec::new();
@@ -245,7 +243,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
                 EthTxPoolExecutor::start_with_channel(
                     create_block_policy(),
                     state_backend.clone(),
-                    // TODO(andr-dev): Add tx_expiry to node config
                     Duration::from_secs(15),
                     Duration::from_secs(5 * 60),
                     node_state.chain_config,
@@ -324,19 +321,16 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             Box::new(InMemoryExecutionDb::new()),
             statesync_provider,
             state_sync_init_peers,
-            node_state
-                .node_config
-                .statesync_max_concurrent_requests
-                .into(),
-            STATESYNC_REQUEST_TIMEOUT,
-            STATESYNC_REQUEST_TIMEOUT,
+            node_state.node_config.statesync_max_concurrent_requests.into(),
+            node_state.node_config.statesync_request_timeout,
+            node_state.node_config.statesync_request_timeout,
         ),
         config_loader: ConfigLoader::new(node_state.node_config_path),
     };
 
     let logger_config: WALoggerConfig<LogFriendlyMonadEvent<_, _, _>> = WALoggerConfig::new(
-        node_state.wal_path.clone(), // output wal path
-        false,                       // flush on every write
+        node_state.wal_path.clone(),
+        false,
     );
     let Ok(mut wal) = logger_config.build() else {
         event!(
@@ -584,8 +578,7 @@ where
         &peer_discovery_config.self_address,
     ) else {
         panic!(
-            "Unable to resolve self address: {:?}",
-            peer_discovery_config.self_address
+            "Unable to resolve self address: {:?}", peer_discovery_config.self_address
         );
     };
 
@@ -651,7 +644,6 @@ where
         "self name record signature mismatch"
     );
 
-    // initial set of peers
     let bootstrap_peers: BTreeMap<_, _> = bootstrap_nodes
         .peers
         .iter()
@@ -727,8 +719,7 @@ where
         refresh_period: Duration::from_secs(peer_discovery_config.refresh_period),
         request_timeout: Duration::from_secs(peer_discovery_config.request_timeout),
         unresponsive_prune_threshold: peer_discovery_config.unresponsive_prune_threshold,
-        last_participation_prune_threshold: peer_discovery_config
-            .last_participation_prune_threshold,
+        last_participation_prune_threshold: peer_discovery_config.last_participation_prune_threshold,
         min_num_peers: peer_discovery_config.min_num_peers,
         max_num_peers: peer_discovery_config.max_num_peers,
         max_group_size: node_config.fullnode_raptorcast.max_group_size,

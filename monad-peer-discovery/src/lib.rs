@@ -853,13 +853,9 @@ pub trait PeerDiscoveryAlgo {
 pub trait PeerDiscoveryAlgoBuilder {
     type PeerDiscoveryAlgoType: PeerDiscoveryAlgo;
 
-    fn build(
-        self,
-    ) -> (
+    fn build(self) -> (
         Self::PeerDiscoveryAlgoType,
-        Vec<
-            PeerDiscoveryCommand<<Self::PeerDiscoveryAlgoType as PeerDiscoveryAlgo>::SignatureType>,
-        >,
+        Vec<PeerDiscoveryCommand<<Self::PeerDiscoveryAlgoType as PeerDiscoveryAlgo>::SignatureType>>
     );
 }
 

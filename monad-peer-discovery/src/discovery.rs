@@ -53,7 +53,6 @@ const PEER_LOOKUP_RATE_LIMIT_PER_SECOND: u32 = 10;
 /// Number of peers to send lookup request to
 const NUM_LOOKUP_PEERS: usize = 3;
 /// Number of validators to connect to if self is a full node
-// TODO: this should be configurable
 const NUM_UPSTREAM_VALIDATORS: usize = 3;
 
 monad_executor::metric_consts! {
@@ -230,8 +229,7 @@ pub struct PeerDiscovery<
     // mapping of node IDs to their corresponding name records
     pub routing_info: BTreeMap<NodeId<CertificateSignaturePubKey<ST>>, MonadNameRecord<ST>>,
     // mapping of node IDs to their participation info, used to track participation in raptorcast
-    pub participation_info:
-        BTreeMap<NodeId<CertificateSignaturePubKey<ST>>, SecondaryRaptorcastInfo>,
+    pub participation_info: BTreeMap<NodeId<CertificateSignaturePubKey<ST>>, SecondaryRaptorcastInfo>,
     // mapping of node IDs to their connection info, used to track ping status
     // a node is inserted into pending_queue and only promoted to routing_info upon a successful ping pong roundtrip
     // this is to ensure the node is reachable at its ip address and port
@@ -1128,7 +1126,7 @@ where
         request: PeerLookupRequest<ST>,
     ) -> Vec<PeerDiscoveryCommand<ST>> {
         let from = from.id;
-        debug!(?from, ?request, "handling peer lookup request");
+        debug!(?from, request = %format!("{request:?}"), "handling peer lookup request");
         self.metrics[GAUGE_PEER_DISC_RECV_LOOKUP_REQUEST] += 1;
 
         let mut cmds = Vec::new();
@@ -1195,7 +1193,7 @@ where
         response: PeerLookupResponse<ST>,
     ) -> Vec<PeerDiscoveryCommand<ST>> {
         let from = from.id;
-        debug!(?from, ?response, "handling peer lookup response");
+        debug!(?from, response = %format!("{response:?}"), "handling peer lookup response");
         self.metrics[GAUGE_PEER_DISC_RECV_LOOKUP_RESPONSE] += 1;
 
         let mut cmds = Vec::new();
@@ -1207,7 +1205,7 @@ where
             .is_none_or(|peer| peer.receiver != from)
         {
             warn!(
-                ?response,
+                response = %format!("{response:?}"),
                 "peer lookup response not in outstanding requests, dropping response..."
             );
             self.metrics[GAUGE_PEER_DISC_DROP_LOOKUP_RESPONSE] += 1;
@@ -1216,7 +1214,7 @@ where
 
         if response.name_records.len() > MAX_PEER_IN_RESPONSE {
             warn!(
-                ?response,
+                response = %format!("{response:?}"),
                 "response includes number of peers larger than max, dropping response..."
             );
             self.metrics[GAUGE_PEER_DISC_DROP_LOOKUP_RESPONSE] += 1;
@@ -1350,8 +1348,7 @@ where
                     info.num_retries += 1;
                     if info.num_retries >= self.unresponsive_prune_threshold {
                         debug!(
-                            ?to,
-                            "full node raptorcast request exceeded number of retries, dropping..."
+                            ?to, "full node raptorcast request exceeded number of retries, dropping..."
                         );
                         info.status = SecondaryRaptorcastConnectionStatus::None;
                         info.num_retries = 0;
@@ -1611,8 +1608,7 @@ where
                 .filter(|(_, info)| info.status == SecondaryRaptorcastConnectionStatus::Connected)
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>();
-            self.metrics[GAUGE_PEER_DISC_NUM_DOWNSTREAM_FULLNODES] =
-                connected_public_full_nodes.len() as u64;
+            self.metrics[GAUGE_PEER_DISC_NUM_DOWNSTREAM_FULLNODES] = connected_public_full_nodes.len() as u64;
         }
 
         self.metrics[GAUGE_PEER_DISC_NUM_PEERS] = self.routing_info.len() as u64;
@@ -1636,7 +1632,7 @@ where
         round: Round,
         epoch: Epoch,
     ) -> Vec<PeerDiscoveryCommand<ST>> {
-        let cmds = Vec::new();
+        let cmds: Vec<PeerDiscoveryCommand<ST>> = Vec::new();
 
         if round > self.current_round {
             trace!(?round, "updating current round in peer discovery");
@@ -1738,7 +1734,7 @@ where
     }
 
     fn update_peers(&mut self, peers: Vec<PeerEntry<ST>>) -> Vec<PeerDiscoveryCommand<ST>> {
-        debug!(?peers, "updating peers");
+        debug!("updating peers: {:?}", peers);
 
         let mut cmds = Vec::new();
         for peer in peers {
@@ -2204,7 +2200,7 @@ mod tests {
         let keys = create_keys::<SignatureType>(2);
         let peer0 = &keys[0];
         let peer1 = &keys[1];
-        let peer1_pubkey = NodeId::new(peer1.pubkey());
+
         let peer_name_record = generate_name_record(peer1, 0);
 
         let (mut state, clock) = generate_test_state(peer0, vec![]);
@@ -3372,7 +3368,6 @@ mod tests {
         let keys = create_keys::<SignatureType>(2);
         let peer0 = &keys[0];
         let peer1 = &keys[1];
-        let peer1_pubkey = NodeId::new(peer1.pubkey());
 
         let (mut state, _clock) = generate_test_state(peer0, vec![]);
         let name_record = generate_name_record(peer1, 0);

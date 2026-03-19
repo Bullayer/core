@@ -97,7 +97,7 @@ pub(crate) fn spawn_tasks(
     spawn(tx::task(cfg, addrlist, tcp_egress_rx));
 }
 
-// Minimum message receive/transmit speed in bytes per second.  Messages that are
+// Minimum message receive/transmit speed in bytes per second. Messages that are
 // transferred slower than this are aborted.
 const MINIMUM_TRANSFER_SPEED: u64 = 1_000_000;
 

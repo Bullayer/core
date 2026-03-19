@@ -26,10 +26,9 @@ use secp256k1::Secp256k1;
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// secp256k1 public key
 #[derive(Copy, Clone, PartialOrd, Ord)]
 pub struct PubKey(secp256k1::PublicKey);
-/// secp256k1 keypair
+#[derive(Clone)]
 pub struct KeyPair(secp256k1::Keypair);
 
 #[derive(ZeroizeOnDrop)]
@@ -41,11 +40,9 @@ impl std::fmt::Display for PrivKeyView {
     }
 }
 
-/// secp256k1 ecdsa recoverable signature
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SecpSignature(secp256k1::ecdsa::RecoverableSignature);
 
-/// wrapped secp256k1 library errors
 #[derive(Debug, Clone)]
 pub struct Error(secp256k1::Error);
 
