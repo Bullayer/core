@@ -16,17 +16,15 @@
 use std::{env, path::PathBuf};
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(stub_ethcall_bindings)");
     println!("cargo:rerun-if-changed=../monad-execution");
+    println!("cargo:rerun-if-env-changed=TRIEDB_TARGET");
 
     let has_execution_lib = env::var("TRIEDB_TARGET").is_ok_and(|target| target == "triedb_driver");
-    if has_execution_lib {
-        println!("cargo:rustc-link-lib=dylib=monad_execution");
-    }
-
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let executor_header = PathBuf::from("../monad-execution/category/rpc/monad_executor.h");
-    if !executor_header.exists() {
+    if !has_execution_lib || !executor_header.exists() {
         // C++ execution submodule not present; write an empty stub so the crate
         // still compiles without the native library.
         std::fs::write(out_path.join("ethcall.rs"), "// stub bindings – monad-execution not present\n")
@@ -35,6 +33,8 @@ fn main() {
         println!("cargo:rustc-cfg=stub_ethcall_bindings");
         return;
     }
+
+    println!("cargo:rustc-link-lib=dylib=monad_execution");
 
     let bindings = bindgen::Builder::default()
         .header("../monad-execution/category/execution/ethereum/chain/chain_config.h")

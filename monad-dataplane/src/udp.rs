@@ -31,6 +31,7 @@ use monoio::buf::{Ipv4RecvMsgParser, UserRecvMsgRingBuf};
 use monoio::{net::udp::UdpSocket, spawn, time};
 use thiserror::Error;
 use tokio::sync::mpsc;
+#[allow(unused_imports)]
 use tracing::{debug, error, trace, warn};
 
 use super::{RecvUdpMsg, UdpMsg, UdpSocketId};
@@ -125,39 +126,20 @@ fn set_socket_buffer_sizes(socket: &UdpSocket, requested_size: usize) {
 
 fn set_recv_buffer_size(socket: &UdpSocket, requested_size: usize) {
     if let Err(e) = socket.set_recv_buffer_size(requested_size) {
-        // On macOS the OS caps the socket buffer; treat as a warning in dev builds
-        #[cfg(target_os = "macos")]
-        tracing::warn!("set_recv_buffer_size to {requested_size} failed (macOS): {e}");
-        #[cfg(not(target_os = "macos"))]
         panic!("set_recv_buffer_size to {requested_size} failed with: {e}");
     }
     let actual_size = socket.recv_buffer_size().expect("get recv buffer size");
     if actual_size < requested_size {
-        #[cfg(target_os = "macos")]
-        tracing::warn!(
-            "udp recv buffer capped at {actual_size} (requested {requested_size}). \
-             Performance may be reduced. Run: sudo sysctl -w kern.ipc.maxsockbuf=125000000"
-        );
-        #[cfg(not(target_os = "macos"))]
         panic!("unable to set udp receive buffer size to {requested_size}. Got {actual_size} instead. Set net.core.rmem_max to at least {requested_size}");
     }
 }
 
 fn set_send_buffer_size(socket: &UdpSocket, requested_size: usize) {
     if let Err(e) = socket.set_send_buffer_size(requested_size) {
-        #[cfg(target_os = "macos")]
-        tracing::warn!("set_send_buffer_size to {requested_size} failed (macOS): {e}");
-        #[cfg(not(target_os = "macos"))]
         panic!("set_send_buffer_size to {requested_size} failed with: {e}");
     }
     let actual_size = socket.send_buffer_size().expect("get send buffer size");
     if actual_size < requested_size {
-        #[cfg(target_os = "macos")]
-        tracing::warn!(
-            "udp send buffer capped at {actual_size} (requested {requested_size}). \
-             Performance may be reduced."
-        );
-        #[cfg(not(target_os = "macos"))]
         panic!("unable to set udp send buffer size to {requested_size}. got {actual_size} instead. set net.core.wmem_max to at least {requested_size}");
     }
 }

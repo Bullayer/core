@@ -5227,6 +5227,8 @@ dependencies = [
 name = "monad-cxx"
 version = "0.1.0"
 dependencies = [
+ "bindgen 0.71.1",
+ "cmake",
  "tracing",
 ]
 
@@ -6056,7 +6058,6 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "inotify",
  "itertools 0.13.0",
  "monad-archive",
  "monad-chain-config",

@@ -15,19 +15,23 @@
 
 use std::{
     ffi::OsString,
+    fs,
     io,
     path::{Path, PathBuf},
     task::Poll,
+    time::Duration,
 };
 
-use futures::{Stream, StreamExt};
-use inotify::{EventMask, EventStream, Inotify, WatchMask};
+use futures::Stream;
 use pin_project::pin_project;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 #[pin_project]
 pub struct SocketWatcher {
-    inotify: EventStream<[u8; 1024]>,
+    #[pin]
+    interval: tokio::time::Interval,
+    socket_path: PathBuf,
+    exists: bool,
     parent: PathBuf,
     filename: OsString,
 }
@@ -56,17 +60,17 @@ impl SocketWatcher {
             })?
             .to_path_buf();
 
-        let inotify = Inotify::init()?;
+        fs::metadata(&parent)?;
 
-        inotify.watches().add(
-            &parent,
-            WatchMask::CREATE | WatchMask::MOVED_FROM | WatchMask::DELETE | WatchMask::DELETE_SELF,
-        )?;
-
-        let inotify = inotify.into_event_stream([0; 1024])?;
+        let socket_path = socket_path.as_ref().to_path_buf();
+        let exists = socket_path.exists();
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         Ok(Self {
-            inotify,
+            interval,
+            socket_path,
+            exists,
             parent,
             filename,
         })
@@ -87,43 +91,32 @@ impl Stream for SocketWatcher {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            let event = match self.as_mut().inotify.poll_next_unpin(cx) {
+            match self.as_mut().project().interval.poll_tick(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
-                Poll::Ready(Some(Ok(event))) => event,
-            };
+                Poll::Ready(_) => {}
+            }
 
-            debug!(mask =? event.mask, "socket watcher inotify event");
-
-            if event.mask.contains(EventMask::DELETE_SELF) {
+            if !self.parent.exists() {
                 error!("socket watcher parent directory deleted");
                 return Poll::Ready(None);
             }
 
-            let Some(name) = &event.name else {
-                error!("socket watcher event does not have a name");
-                continue;
-            };
+            let exists_now = self.socket_path.exists();
+            debug!(exists_now, socket_path = ?self.socket_path, "socket watcher poll");
 
-            if name != &self.filename {
+            if exists_now == self.exists {
                 continue;
             }
 
-            if event.mask.contains(EventMask::CREATE) {
-                return Poll::Ready(Some(Ok(SocketWatcherEvent::Create(self.parent.join(name)))));
-            }
+            self.exists = exists_now;
 
-            if event.mask.contains(EventMask::MOVED_FROM) {
-                error!("socket watcher detected socket file moved");
-                return Poll::Ready(None);
-            }
-
-            if event.mask.contains(EventMask::DELETE) {
+            if exists_now {
+                return Poll::Ready(Some(Ok(SocketWatcherEvent::Create(
+                    self.parent.join(&self.filename),
+                ))));
+            } else {
                 return Poll::Ready(Some(Ok(SocketWatcherEvent::Delete)));
             }
-
-            warn!(filename =? event.name, mask =? event.mask, "socket watcher inotify unknown event");
         }
     }
 }
@@ -257,10 +250,10 @@ mod tests {
         let result = tokio::time::timeout(Duration::from_secs(2), watcher.next()).await;
 
         assert!(result.is_ok(), "Should receive event within timeout");
-        let event = result.unwrap();
+        let event = result.unwrap().unwrap().unwrap();
         assert!(
-            event.is_none(),
-            "Stream should terminate when socket is moved"
+            matches!(event, SocketWatcherEvent::Delete),
+            "Socket move should be observed as Delete"
         );
     }
 

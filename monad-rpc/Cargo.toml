@@ -56,7 +56,6 @@ flume = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
-inotify = { workspace = true }
 itertools = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics", "trace"] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio", "trace"] }

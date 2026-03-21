@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use alloy_consensus::{Header, Transaction as _, TxEnvelope};
+use alloy_consensus::{Header, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_sol_types::decode_revert_reason;
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,8 @@ use std::{
     ffi::{CStr, CString},
     path::Path,
 };
+#[cfg(not(stub_ethcall_bindings))]
+use alloy_consensus::Transaction as _;
 #[cfg(not(stub_ethcall_bindings))]
 use alloy_eips::eip2718::Encodable2718;
 #[cfg(not(stub_ethcall_bindings))]
