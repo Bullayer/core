@@ -46,7 +46,6 @@ where
     pub root: BlockId,
     pub high_certificate: RoundCertificate<ST, SCT, EPT>,
 
-    // TODO can we get rid of this by including an epoch_start_block_id in every block?
     pub validator_sets: LimitedVec<LockedEpoch, MAX_VALIDATOR_SETS>,
 }
 

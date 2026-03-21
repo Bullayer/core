@@ -31,7 +31,6 @@ pub const MAX_VALIDATORS: usize = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, RlpEncodable, RlpDecodable)]
 pub struct ValidatorSetDataWithEpoch<SCT: SignatureCollection> {
-    /// Validator set are active for this epoch
     pub epoch: Epoch,
 
     #[serde(bound(serialize = "", deserialize = ""))]

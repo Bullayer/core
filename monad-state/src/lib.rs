@@ -1072,8 +1072,7 @@ where
                     }),
                 ];
 
-                // if expand_to_group and not live and is_validator, emit
-                // validator peers to statesync
+                // if expand_to_group and not live and is_validator, emit validator peers to statesync
                 if self.statesync_expand_to_group
                     && self.is_statesyncing()
                     && val_ids.contains(&self.nodeid)
@@ -1519,7 +1518,7 @@ where
             if locked_epoch >= self.consensus_config.chain_config.get_staking_activation() {
                 let expected_val_data: BTreeMap<
                     NodeId<SCT::NodeIdPubKey>,
-                    (Stake, SignatureCollectionPubKeyType<SCT>),
+                    (Stake, SignatureCollectionPubKeyType<SCT>)
                 > = epoch_valset
                     .validators
                     .0
@@ -1529,7 +1528,7 @@ where
 
                 let db_val_data: BTreeMap<
                     NodeId<SCT::NodeIdPubKey>,
-                    (Stake, SignatureCollectionPubKeyType<SCT>),
+                    (Stake, SignatureCollectionPubKeyType<SCT>)
                 > = self
                     .state_backend
                     .read_valset_at_block(delay_seq_num, locked_epoch) // TODO use root_seq_num here

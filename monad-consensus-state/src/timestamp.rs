@@ -20,10 +20,7 @@ use monad_consensus_types::quorum_certificate::{
 #[derive(Debug)]
 pub struct BlockTimestamp {
     local_time_ns: u128,
-
     max_delta_ns: u128,
-
-    /// TODO: this needs an upper-bound
     latency_estimate_ns: u128,
 }
 
