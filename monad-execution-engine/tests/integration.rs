@@ -304,12 +304,11 @@ async fn test_graceful_shutdown() {
 #[tokio::test]
 async fn test_in_memory_db_state() {
     use monad_execution_engine::traits::ExecutionDb;
-    use monad_eth_types::EthAccount;
     use monad_types::GENESIS_BLOCK_ID;
-    use revm::database::states::{BundleState, StorageSlot};
+    use revm::database::states::{AccountStatus, BundleState, StorageSlot};
     use revm::database::BundleAccount;
+    use revm::primitives::HashMap;
     use revm::state::AccountInfo;
-    use revm::database::states::AccountStatus;
 
     let mut db = InMemoryExecutionDb::new();
 
@@ -334,7 +333,7 @@ async fn test_in_memory_db_state() {
         StorageSlot::new_changed(U256::ZERO, U256::from_be_bytes(value.0)),
     );
 
-    let mut state: alloy_primitives::map::AddressMap<BundleAccount> = Default::default();
+    let mut state: HashMap<Address, BundleAccount> = Default::default();
     state.insert(addr, BundleAccount {
         info: Some(account_info),
         original_info: None,

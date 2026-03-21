@@ -5227,8 +5227,6 @@ dependencies = [
 name = "monad-cxx"
 version = "0.1.0"
 dependencies = [
- "bindgen 0.71.1",
- "cmake",
  "tracing",
 ]
 
