@@ -357,9 +357,7 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.fetches.poll_recv(cx).map(|response| {
             let response = response.expect("fetches_tx never dropped");
-            Some(MonadEvent::BlockSyncEvent(BlockSyncEvent::SelfResponse {
-                response,
-            }))
+            Some(MonadEvent::BlockSyncEvent(BlockSyncEvent::SelfResponse { response }))
         })
     }
 }

@@ -80,7 +80,6 @@ where
     }
 }
 
-// FIXME: add specific error returns for the different failures
 impl<ST, SCT, SBT, CCT, CRT>
     BlockValidator<ST, SCT, EthExecutionProtocol, EthBlockPolicy<ST, SCT, CCT, CRT>, SBT, CCT, CRT>
     for EthBlockValidator<ST, SCT>
@@ -226,8 +225,7 @@ where
         if ommers_hash != EMPTY_OMMER_ROOT_HASH {
             return Err(HeaderError::NonEmptyOmmersHash(ommers_hash.into()));
         }
-        let expected_transactions_root =
-            calculate_transaction_root(&body.execution_body.transactions);
+        let expected_transactions_root = calculate_transaction_root(&body.execution_body.transactions);
         if transactions_root != expected_transactions_root {
             return Err(HeaderError::InvalidTransactionsRoot {
                 expected: expected_transactions_root,

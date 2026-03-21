@@ -324,9 +324,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             if let Some(ref exec_path) = exec_event_str {
                 parse_args.extend(["--exec-event-path".into(), exec_path.clone()]);
             }
-            if let Some(ref otel_ep) = otel_str {
-                parse_args.extend(["--otel-endpoint".into(), otel_ep.clone()]);
-            }
 
             let rpc_cli = monad_rpc::cli::Cli::try_parse_from(&parse_args)
                 .expect("failed to construct RPC server configuration");
