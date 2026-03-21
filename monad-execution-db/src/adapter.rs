@@ -19,6 +19,7 @@ use reth_provider::{
 use reth_storage_api::{
     AccountReader, DBProvider, HistoryWriter, StateProvider,
 };
+use rayon::prelude::*;
 use reth_trie::{HashedPostState, KeccakKeyHasher};
 use revm::database::states::BundleState;
 use tracing::{debug, error, info, warn};
@@ -207,7 +208,7 @@ impl RethExecutionDb {
         let bundle = bridge::state_deltas_to_bundle(state_deltas, code);
 
         // Compute hashed state before moving bundle into ExecutionOutcome
-        let hashed = HashedPostState::from_bundle_state::<KeccakKeyHasher>(bundle.state.iter());
+        let hashed = HashedPostState::from_bundle_state::<KeccakKeyHasher>(bundle.state.par_iter());
 
         let outcome = ExecutionOutcome::new(
             bundle,
@@ -341,7 +342,8 @@ impl RethExecutionDb {
             all_receipts.push(block_receipts);
         }
 
-        let hashed = HashedPostState::from_bundle_state::<KeccakKeyHasher>(merged_bundle.state.iter());
+        let hashed =
+            HashedPostState::from_bundle_state::<KeccakKeyHasher>(merged_bundle.state.par_iter());
 
         let outcome = ExecutionOutcome::new(
             merged_bundle,

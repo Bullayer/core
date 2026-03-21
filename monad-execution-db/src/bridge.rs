@@ -1,6 +1,6 @@
 use alloy_consensus::constants::KECCAK_EMPTY;
 use alloy_consensus::{ReceiptEnvelope, Typed2718, TxType};
-use alloy_primitives::{map::B256Map, B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use reth_primitives_traits::Account;
 use revm::database::states::{
     plain_account::StorageWithOriginalValues,
@@ -8,6 +8,7 @@ use revm::database::states::{
     AccountStatus, BundleState, StorageSlot,
 };
 use revm::database::BundleAccount;
+use revm::primitives::HashMap;
 use revm::state::AccountInfo;
 
 use monad_eth_types::EthAccount;
@@ -67,8 +68,8 @@ pub fn state_deltas_to_bundle(
     state_deltas: &StateDeltas,
     code: &CodeMap,
 ) -> BundleState {
-    let mut state: alloy_primitives::map::AddressMap<BundleAccount> = Default::default();
-    let mut block_reverts: Vec<(alloy_primitives::Address, AccountRevert)> = Vec::new();
+    let mut state: HashMap<Address, BundleAccount> = Default::default();
+    let mut block_reverts: Vec<(Address, AccountRevert)> = Vec::new();
     let mut reverts_size: usize = 0;
 
     for (address, delta) in state_deltas {
@@ -88,7 +89,7 @@ pub fn state_deltas_to_bundle(
         };
 
         let mut storage: StorageWithOriginalValues = Default::default();
-        let mut storage_revert: alloy_primitives::map::U256Map<RevertToSlot> = Default::default();
+        let mut storage_revert: HashMap<U256, RevertToSlot> = Default::default();
         for (slot, sd) in &delta.storage {
             let key = U256::from_be_bytes(slot.0);
             storage.insert(
@@ -132,7 +133,7 @@ pub fn state_deltas_to_bundle(
         state.insert(*address, bundle_account);
     }
 
-    let mut contracts: B256Map<revm::bytecode::Bytecode> = Default::default();
+    let mut contracts: HashMap<B256, revm::bytecode::Bytecode> = Default::default();
     for (hash, bytecode) in code {
         contracts.insert(
             *hash,

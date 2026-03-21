@@ -6,7 +6,7 @@ use reth_primitives_traits::{Bytecode, StorageEntry};
 use reth_provider::DatabaseProviderFactory;
 use reth_storage_api::DBProvider;
 use reth_trie::StateRoot;
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseTrieCursorFactory, LegacyKeyAdapter};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseTrieCursorFactory};
 use tracing::{debug, error};
 
 use monad_execution_engine::statesync::{
@@ -215,7 +215,7 @@ impl StateSyncApplierDb for RethExecutionDb {
             Ok(provider) => {
                 let tx = provider.tx_ref();
                 type DbStateRoot<'a, TX> = StateRoot<
-                    DatabaseTrieCursorFactory<&'a TX, LegacyKeyAdapter>,
+                    DatabaseTrieCursorFactory<&'a TX>,
                     DatabaseHashedCursorFactory<&'a TX>,
                 >;
                 match <DbStateRoot<'_, _> as DatabaseStateRoot<'_, _>>::from_tx(tx).root() {

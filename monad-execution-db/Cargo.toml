@@ -37,6 +37,7 @@ reth-trie = { workspace = true }
 reth-trie-common = { workspace = true }
 reth-trie-db = { workspace = true }
 revm = { workspace = true }
+rayon = { workspace = true }
 
 eyre = { workspace = true }
 thiserror = { workspace = true }
