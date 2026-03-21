@@ -305,7 +305,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             let ws_port_str = node_state.rpc_ws_port.to_string();
             let worker_threads_str = node_state.rpc_worker_threads.to_string();
             let exec_event_str = node_state.exec_event_path.as_ref().map(|p| p.display().to_string());
-            let otel_str = node_state.otel_endpoint_interval.as_ref().map(|(ep, _)| ep.clone());
 
             // Note: --triedb-path is intentionally omitted here. The C++ eth_call executor
             // is not yet wired up in this Rust-only build; eth_call/eth_trace RPC endpoints
