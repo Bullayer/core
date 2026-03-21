@@ -58,7 +58,6 @@ pub struct NodeState {
     pub wal_path: PathBuf,
     pub ledger_path: PathBuf,
     pub control_panel_ipc_path: PathBuf,
-    pub triedb_path: PathBuf,
     pub execution_db_path: PathBuf,
     pub persisted_peers_path: PathBuf,
 
@@ -85,7 +84,6 @@ impl NodeState {
             devnet_chain_config_override: maybe_devnet_chain_config_override_path,
             wal_path,
             ledger_path,
-            triedb_path,
             execution_db_path,
             control_panel_ipc_path,
             statesync_sq_thread_cpu: _,
@@ -193,7 +191,6 @@ impl NodeState {
             validators_path: validators_config_path,
             wal_path,
             ledger_path,
-            triedb_path,
             execution_db_path,
             control_panel_ipc_path,
 

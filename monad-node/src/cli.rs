@@ -52,10 +52,6 @@ pub struct Cli {
     #[arg(long)]
     pub ledger_path: PathBuf,
 
-    /// Set the monad triedb path
-    #[arg(long)]
-    pub triedb_path: PathBuf,
-
     /// Set the path for the reth execution database (MDBX + static files)
     #[arg(long)]
     pub execution_db_path: Option<PathBuf>,
