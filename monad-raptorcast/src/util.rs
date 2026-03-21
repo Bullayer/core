@@ -290,6 +290,7 @@ pub enum BroadcastGroupError {
     InvalidAuthor,
 }
 
+#[allow(dead_code)]
 pub struct PrimaryBroadcastGroup<'a, PT: PubKey> {
     epoch: Epoch,
     author: &'a NodeId<PT>,

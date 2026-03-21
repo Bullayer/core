@@ -292,9 +292,8 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
                 parse_args.extend(["--otel-endpoint".into(), otel_ep.clone()]);
             }
 
-            let mut rpc_cli = monad_rpc::cli::Cli::try_parse_from(&parse_args)
+            let rpc_cli = monad_rpc::cli::Cli::try_parse_from(&parse_args)
                 .expect("failed to construct RPC server configuration");
-            rpc_cli.ipc_path = None;
 
             tokio::spawn(async move {
                 if let Err(e) = monad_rpc::start_rpc_server(
