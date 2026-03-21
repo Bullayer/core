@@ -207,27 +207,27 @@ sorted_vector_map = "0.2.0"
 sorted-vec = "0.8.3"
 strum = "0.27"
 syn = { version = "1.0.0", features = ["full"] }
-reth-chainspec = { path = "../reth/crates/chainspec", default-features = false }
-reth-engine-primitives = { path = "../reth/crates/engine/primitives", default-features = false }
-reth-ethereum-engine-primitives = { path = "../reth/crates/ethereum/engine-primitives", default-features = false }
-reth-chain-state = { path = "../reth/crates/chain-state" }
-reth-db = { path = "../reth/crates/storage/db", default-features = false }
-reth-db-api = { path = "../reth/crates/storage/db-api" }
-reth-ethereum-primitives = { path = "../reth/crates/ethereum/primitives", default-features = false }
-reth-execution-types = { path = "../reth/crates/evm/execution-types", default-features = false }
-reth-libmdbx = { path = "../reth/crates/storage/libmdbx-rs", features = ["return-borrowed"] }
-reth-node-types = { path = "../reth/crates/node/types" }
-reth-primitives-traits = { path = "../reth/crates/primitives-traits", default-features = false }
-reth-provider = { path = "../reth/crates/storage/provider" }
-reth-prune-types = { path = "../reth/crates/prune/types", default-features = false }
-reth-stages-types = { path = "../reth/crates/stages/types", default-features = false }
-reth-static-file-types = { path = "../reth/crates/static-file/types", default-features = false }
-reth-storage-api = { path = "../reth/crates/storage/storage-api", default-features = false }
-reth-storage-errors = { path = "../reth/crates/storage/errors", default-features = false }
-reth-tasks = { path = "../reth/crates/tasks" }
-reth-trie = { path = "../reth/crates/trie/trie" }
-reth-trie-common = { path = "../reth/crates/trie/common", default-features = false }
-reth-trie-db = { path = "../reth/crates/trie/db" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-chain-state = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-db-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-libmdbx = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", features = ["return-borrowed"] }
+reth-node-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-prune-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-static-file-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-storage-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3", default-features = false }
+reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.11.3" }
 revm = { version = "36.0.0", default-features = false }
 tempfile = "3.5"
 test-case = "3.0"
