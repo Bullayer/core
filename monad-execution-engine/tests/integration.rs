@@ -305,9 +305,11 @@ async fn test_graceful_shutdown() {
 async fn test_in_memory_db_state() {
     use monad_execution_engine::traits::ExecutionDb;
     use monad_eth_types::EthAccount;
-    use monad_execution_engine::types::{AccountDelta, StorageDelta};
     use monad_types::GENESIS_BLOCK_ID;
-    use std::collections::HashMap;
+    use revm::database::states::{BundleState, StorageSlot};
+    use revm::database::BundleAccount;
+    use revm::state::AccountInfo;
+    use revm::database::states::AccountStatus;
 
     let mut db = InMemoryExecutionDb::new();
 
@@ -318,32 +320,32 @@ async fn test_in_memory_db_state() {
     assert!(db.read_account(&addr).is_none());
     assert_eq!(db.read_storage(&addr, &slot), B256::ZERO);
 
-    let account = EthAccount {
-        nonce: 1,
+    let account_info = AccountInfo {
         balance: U256::from(1000),
-        code_hash: None,
-        is_delegated: false,
+        nonce: 1,
+        code_hash: alloy_consensus::constants::KECCAK_EMPTY,
+        code: None,
+        account_id: None,
     };
 
-    let mut storage_deltas = HashMap::new();
-    storage_deltas.insert(
-        slot,
-        StorageDelta {
-            old_value: B256::ZERO,
-            new_value: value,
-        },
+    let mut storage = revm::database::states::plain_account::StorageWithOriginalValues::default();
+    storage.insert(
+        U256::from_be_bytes(slot.0),
+        StorageSlot::new_changed(U256::ZERO, U256::from_be_bytes(value.0)),
     );
 
-    let mut state_deltas = HashMap::new();
-    state_deltas.insert(
-        addr,
-        AccountDelta {
-            old_account: None,
-            new_account: Some(account.clone()),
-            storage: storage_deltas,
-            ..Default::default()
-        },
-    );
+    let mut state: alloy_primitives::map::AddressMap<BundleAccount> = Default::default();
+    state.insert(addr, BundleAccount {
+        info: Some(account_info),
+        original_info: None,
+        storage,
+        status: AccountStatus::InMemoryChange,
+    });
+
+    let bundle = BundleState {
+        state,
+        ..Default::default()
+    };
 
     let header = Header {
         number: 1,
@@ -354,8 +356,7 @@ async fn test_in_memory_db_state() {
     db.commit(
         block_id,
         &header,
-        &state_deltas,
-        &HashMap::new(),
+        bundle,
         &[],
         &[],
     );

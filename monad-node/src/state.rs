@@ -59,6 +59,7 @@ pub struct NodeState {
     pub ledger_path: PathBuf,
     pub control_panel_ipc_path: PathBuf,
     pub triedb_path: PathBuf,
+    pub execution_db_path: PathBuf,
     pub persisted_peers_path: PathBuf,
 
     pub otel_endpoint_interval: Option<(String, Duration)>,
@@ -85,6 +86,7 @@ impl NodeState {
             wal_path,
             ledger_path,
             triedb_path,
+            execution_db_path,
             control_panel_ipc_path,
             statesync_sq_thread_cpu: _,
             keystore_password,
@@ -163,6 +165,10 @@ impl NodeState {
                 .as_millis()
         ));
 
+        let execution_db_path = execution_db_path.unwrap_or_else(|| {
+            ledger_path.parent().unwrap_or(Path::new(".")).join("execution_db")
+        });
+
         let otel_endpoint_interval = match (otel_endpoint, record_metrics_interval_seconds) {
             (Some(otel_endpoint), Some(record_metrics_interval_seconds)) => Some((
                 otel_endpoint,
@@ -188,6 +194,7 @@ impl NodeState {
             wal_path,
             ledger_path,
             triedb_path,
+            execution_db_path,
             control_panel_ipc_path,
 
             otel_endpoint_interval,

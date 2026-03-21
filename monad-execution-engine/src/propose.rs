@@ -10,7 +10,7 @@ use monad_validator::signature_collection::SignatureCollection;
 
 use crate::block_hash::BlockHashChain;
 use crate::traits::{BlockExecutor, ExecutionDb, ExecutionError};
-use crate::types::{Block, BlockExecOutput, CodeMap, StateDeltas};
+use crate::types::{Block, BlockExecOutput};
 use crate::validation::{compute_block_hash, validate_live_execution_outputs};
 
 fn static_validate_consensus<ST, SCT>(
@@ -63,17 +63,16 @@ where
         &block_hash_buffer,
     )?;
 
-    let state_deltas = StateDeltas::new();
-    let code = CodeMap::new();
     db.commit(
         block_id,
         &exec_output.eth_header,
-        &state_deltas,
-        &code,
+        exec_output.bundle.clone(),
         &exec_output.receipts,
         &eth_block.transactions,
     );
 
+    // Switch context to the block we just committed so read_eth_header() returns it.
+    db.set_block_and_prefix(seq_num, block_id);
     let output_header = db.read_eth_header();
 
     validate_live_execution_outputs(&eth_block.header, &output_header)?;
@@ -92,5 +91,6 @@ where
         eth_block_hash,
         transactions: eth_block.transactions,
         receipts: exec_output.receipts,
+        bundle: exec_output.bundle,
     })
 }

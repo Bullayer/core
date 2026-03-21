@@ -9,6 +9,7 @@ name = "monad-node"
 bench = false
 
 [dependencies]
+alloy-consensus = { workspace = true }
 monad-bls = { workspace = true }
 monad-chain-config = { workspace = true }
 monad-consensus-state = { workspace = true }
@@ -20,6 +21,7 @@ monad-eth-block-policy = { workspace = true }
 monad-eth-block-validator = { workspace = true }
 monad-eth-txpool-executor = { workspace = true }
 monad-rpc = { workspace = true }
+monad-execution-db = { workspace = true }
 monad-execution-engine = { workspace = true }
 monad-executor = { workspace = true }
 monad-executor-glue = { workspace = true }
@@ -35,7 +37,6 @@ monad-state = { workspace = true }
 monad-state-backend = { workspace = true }
 monad-state-backend-cache = { workspace = true }
 monad-statesync = { workspace = true }
-monad-triedb-utils = { workspace = true }
 monad-types = { workspace = true }
 monad-updaters = { workspace = true, features = ["monad-triedb", "tokio"] }
 monad-validator = { workspace = true }
@@ -45,6 +46,8 @@ monad-wireauth = { workspace = true }
 
 alloy-primitives = { workspace = true }
 alloy-rlp = { workspace = true }
+reth-chainspec = { workspace = true }
+reth-tasks = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures-util = { workspace = true }

@@ -24,7 +24,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 use futures_util::{Stream, StreamExt};
 use inotify::{Inotify, WatchMask};
 use lru::LruCache;
-use monad_block_persist::{BlockPersist, FileBlockPersist, BLOCKDB_HEADERS_PATH};
+use monad_block_persist::{BlockPersist, RocksDbBlockPersist};
 use monad_consensus_types::{
     block::{ConsensusBlockHeader, ConsensusFullBlock},
     quorum_certificate::QuorumCertificate,
@@ -121,11 +121,11 @@ async fn main() {
 
     let mut epoch_validators = BTreeMap::default();
 
-    let block_persist: FileBlockPersist<
+    let block_persist: RocksDbBlockPersist<
         SignatureType,
         SignatureCollectionType,
         ExecutionProtocolType,
-    > = FileBlockPersist::new(ledger_path.clone());
+    > = RocksDbBlockPersist::new(ledger_path.clone());
 
     let mut last_high_certificate = RoundCertificate::Qc(QuorumCertificate::genesis_qc());
     let mut tip_stream = Box::pin(latest_tip_stream(&forkpoint_path, &ledger_path));
@@ -246,15 +246,12 @@ pub fn latest_tip_stream(
     ),
 > {
     let inotify = Inotify::init().expect("error initializing inotify");
+    // `RocksDbBlockPersist` bumps `LEDGER_HEAD_NOTIFY_FILE` in this directory on head updates.
     inotify
         .watches()
         .add(
-            {
-                let mut headers_path = PathBuf::from(ledger_path);
-                headers_path.push(BLOCKDB_HEADERS_PATH);
-                headers_path
-            },
-            WatchMask::CLOSE_WRITE,
+            ledger_path.to_path_buf(),
+            WatchMask::CLOSE_WRITE | WatchMask::MODIFY,
         )
         .expect("failed to watch ledger path");
     inotify
@@ -274,11 +271,11 @@ pub fn latest_tip_stream(
         .into_event_stream(inotify_buffer)
         .expect("failed to create inotify event stream");
 
-    let block_persist: FileBlockPersist<
+    let block_persist: RocksDbBlockPersist<
         SignatureType,
         SignatureCollectionType,
         ExecutionProtocolType,
-    > = FileBlockPersist::new(ledger_path.to_owned());
+    > = RocksDbBlockPersist::new(ledger_path.to_owned());
 
     let forkpoint_path = forkpoint_path.to_owned();
 

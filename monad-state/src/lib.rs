@@ -1408,7 +1408,10 @@ where
             let delay_executed = self
                 .state_backend
                 .get_execution_result(&delay_block_id, &delay_seq_num, true)
-                .is_ok();
+                .is_ok()
+                // Genesis block has no transactions; always treat as executed so consensus
+                // can start immediately from an empty database.
+                || (delay_block_id == GENESIS_BLOCK_ID && delay_seq_num == GENESIS_SEQ_NUM);
 
             if delay_executed {
                 // TODO assert state root matches?

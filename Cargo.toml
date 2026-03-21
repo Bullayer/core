@@ -43,6 +43,7 @@ monad-eth-txpool-ipc = { path = "./monad-eth-txpool-ipc" }
 monad-eth-txpool-types = { path = "./monad-eth-txpool-types" }
 monad-eth-types = { path = "./monad-eth-types" }
 monad-ethcall = { path = "./monad-ethcall" }
+monad-execution-db = { path = "./monad-execution-db" }
 monad-execution-engine = { path = "./monad-execution-engine" }
 monad-executor = { path = "./monad-executor" }
 monad-executor-glue = { path = "./monad-executor-glue" }
@@ -102,6 +103,7 @@ alloy-json-rpc = "1.7"
 alloy-network = "1.7"
 alloy-primitives = "1.5"
 alloy-rlp = { version = "0.3", features = ["arrayvec"] }
+alloy-trie = { version = "0.9", features = ["ethereum"] }
 alloy-rpc-client = "1.7"
 alloy-rpc-types = { version = "1.7", default-features = false, features = ["eth"] }
 alloy-rpc-types-eth = "1.7"
@@ -187,6 +189,7 @@ rand_distr = "0.4"
 rayon = "1.7"
 regex = "1.10.2"
 reqwest = { version = "0.12.28", features = ["json"] }
+rocksdb = "0.24"
 rstest = "0.25.0"
 schemars = "0.8.21"
 scrypt = { version = "0.11", default-features = false }
@@ -204,6 +207,28 @@ sorted_vector_map = "0.2.0"
 sorted-vec = "0.8.3"
 strum = "0.27"
 syn = { version = "1.0.0", features = ["full"] }
+reth-chainspec = { path = "../reth/crates/chainspec", default-features = false }
+reth-engine-primitives = { path = "../reth/crates/engine/primitives", default-features = false }
+reth-ethereum-engine-primitives = { path = "../reth/crates/ethereum/engine-primitives", default-features = false }
+reth-chain-state = { path = "../reth/crates/chain-state" }
+reth-db = { path = "../reth/crates/storage/db", default-features = false }
+reth-db-api = { path = "../reth/crates/storage/db-api" }
+reth-ethereum-primitives = { path = "../reth/crates/ethereum/primitives", default-features = false }
+reth-execution-types = { path = "../reth/crates/evm/execution-types", default-features = false }
+reth-libmdbx = { path = "../reth/crates/storage/libmdbx-rs", features = ["return-borrowed"] }
+reth-node-types = { path = "../reth/crates/node/types" }
+reth-primitives-traits = { path = "../reth/crates/primitives-traits", default-features = false }
+reth-provider = { path = "../reth/crates/storage/provider" }
+reth-prune-types = { path = "../reth/crates/prune/types", default-features = false }
+reth-stages-types = { path = "../reth/crates/stages/types", default-features = false }
+reth-static-file-types = { path = "../reth/crates/static-file/types", default-features = false }
+reth-storage-api = { path = "../reth/crates/storage/storage-api", default-features = false }
+reth-storage-errors = { path = "../reth/crates/storage/errors", default-features = false }
+reth-tasks = { path = "../reth/crates/tasks" }
+reth-trie = { path = "../reth/crates/trie/trie" }
+reth-trie-common = { path = "../reth/crates/trie/common", default-features = false }
+reth-trie-db = { path = "../reth/crates/trie/db" }
+revm = { version = "36.0.0", default-features = false }
 tempfile = "3.5"
 test-case = "3.0"
 thiserror = "1.0"

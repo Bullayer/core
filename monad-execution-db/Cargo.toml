@@ -1,0 +1,52 @@
+[package]
+name = "monad-execution-db"
+version = "0.1.0"
+edition = "2021"
+
+# Benchmarks use criterion; this allows cargo bench to accept criterion options.
+[lib]
+bench = false
+
+[dependencies]
+monad-execution-engine = { workspace = true }
+monad-eth-types = { workspace = true }
+monad-types = { workspace = true }
+monad-crypto = { workspace = true }
+monad-state-backend = { workspace = true }
+monad-validator = { workspace = true }
+
+alloy-consensus = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-rlp = { workspace = true }
+
+reth-chainspec = { workspace = true }
+reth-ethereum-engine-primitives = { workspace = true }
+reth-db = { workspace = true, features = ["mdbx"] }
+reth-db-api = { workspace = true }
+reth-ethereum-primitives = { workspace = true, features = ["reth-codec"] }
+reth-execution-types = { workspace = true }
+reth-node-types = { workspace = true }
+reth-primitives-traits = { workspace = true, features = ["reth-codec"] }
+reth-provider = { workspace = true }
+reth-prune-types = { workspace = true }
+reth-static-file-types = { workspace = true, features = ["std"] }
+reth-storage-api = { workspace = true, features = ["std"] }
+reth-storage-errors = { workspace = true }
+reth-tasks = { workspace = true }
+reth-trie = { workspace = true }
+reth-trie-common = { workspace = true }
+reth-trie-db = { workspace = true }
+revm = { workspace = true }
+
+eyre = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }
+
+[[bench]]
+name = "execution_db_bench"
+harness = false

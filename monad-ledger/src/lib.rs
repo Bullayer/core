@@ -23,7 +23,7 @@ use std::{
 };
 
 use futures::Stream;
-use monad_block_persist::{BlockPersist, FileBlockPersist};
+use monad_block_persist::{BlockPersist, RocksDbBlockPersist};
 use monad_blocksync::messages::message::{
     BlockSyncBodyResponse, BlockSyncHeadersResponse, BlockSyncResponseMessage,
     BLOCKSYNC_MAX_NUM_HEADERS,
@@ -39,18 +39,18 @@ use monad_eth_types::EthExecutionProtocol;
 use monad_execution_engine::command::ExecutionCommand;
 use monad_executor::{Executor, ExecutorMetrics, ExecutorMetricsChain};
 use monad_executor_glue::{BlockSyncEvent, LedgerCommand, MonadEvent};
-use monad_types::{BlockId, GENESIS_ROUND, Round, SeqNum};
+use monad_types::{BlockId, Round, SeqNum, GENESIS_ROUND};
 use monad_validator::signature_collection::SignatureCollection;
 use tracing::{info, trace, warn};
 
-/// A ledger for committed Ethereum blocks
-/// Blocks are RLP encoded and written to their own individual file, named by the block number
+/// A ledger for committed Ethereum blocks.
+/// Blocks are RLP-encoded and stored in RocksDB under `{ledger_path}/rocksdb/`.
 pub struct MonadBlockFileLedger<ST, SCT>
 where
     ST: CertificateSignatureRecoverable,
     SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>>,
 {
-    bft_block_persist: FileBlockPersist<ST, SCT, EthExecutionProtocol>,
+    bft_block_persist: RocksDbBlockPersist<ST, SCT, EthExecutionProtocol>,
 
     metrics: ExecutorMetrics,
     last_commit: Option<(SeqNum, Round)>,
@@ -60,8 +60,11 @@ where
     block_payload_cache: HashMap<ConsensusBlockBodyId, ConsensusBlockBody<EthExecutionProtocol>>,
     block_cache_index: BTreeMap<Round, (BlockId, ConsensusBlockBodyId)>,
 
-    fetches_tx: tokio::sync::mpsc::UnboundedSender<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
-    fetches: tokio::sync::mpsc::UnboundedReceiver<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
+    fetches_tx:
+        tokio::sync::mpsc::UnboundedSender<BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>>,
+    fetches: tokio::sync::mpsc::UnboundedReceiver<
+        BlockSyncResponseMessage<ST, SCT, EthExecutionProtocol>,
+    >,
 
     execution_tx: tokio::sync::mpsc::UnboundedSender<ExecutionCommand<ST, SCT>>,
 
@@ -98,7 +101,7 @@ where
             Err(e) => panic!("{}", e),
         }
 
-        let bft_block_persist = FileBlockPersist::new(ledger_path);
+        let bft_block_persist = RocksDbBlockPersist::new(ledger_path);
 
         let (fetches_tx, fetches) = tokio::sync::mpsc::unbounded_channel();
         Self {
@@ -277,10 +280,12 @@ where
                             .unwrap();
 
                         let block_id = block.get_id();
-                        self.execution_tx.send(ExecutionCommand::Propose {
-                            block_id,
-                            block: block.clone(),
-                        }).unwrap();
+                        self.execution_tx
+                            .send(ExecutionCommand::Propose {
+                                block_id,
+                                block: block.clone(),
+                            })
+                            .unwrap();
                     }
 
                     self.update_cache(block);
@@ -307,11 +312,13 @@ where
                         .update_finalized_head(&block_id)
                         .unwrap();
 
-                    self.execution_tx.send(ExecutionCommand::Finalize {
-                        seq_num,
-                        block_id,
-                        block,
-                    }).unwrap();
+                    self.execution_tx
+                        .send(ExecutionCommand::Finalize {
+                            seq_num,
+                            block_id,
+                            block,
+                        })
+                        .unwrap();
                 }
                 LedgerCommand::LedgerFetchHeaders(block_range) => {
                     let fetches_tx = self.fetches_tx.clone();

@@ -56,6 +56,10 @@ pub struct Cli {
     #[arg(long)]
     pub triedb_path: PathBuf,
 
+    /// Set the path for the reth execution database (MDBX + static files)
+    #[arg(long)]
+    pub execution_db_path: Option<PathBuf>,
+
     /// Set a custom monad control panel ipc path
     #[arg(long)]
     pub control_panel_ipc_path: PathBuf,

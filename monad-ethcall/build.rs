@@ -23,6 +23,19 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=monad_execution");
     }
 
+    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let executor_header = PathBuf::from("../monad-execution/category/rpc/monad_executor.h");
+    if !executor_header.exists() {
+        // C++ execution submodule not present; write an empty stub so the crate
+        // still compiles without the native library.
+        std::fs::write(out_path.join("ethcall.rs"), "// stub bindings – monad-execution not present\n")
+            .expect("Couldn't write stub bindings");
+        // Signal to lib.rs to use the stub code path.
+        println!("cargo:rustc-cfg=stub_ethcall_bindings");
+        return;
+    }
+
     let bindings = bindgen::Builder::default()
         .header("../monad-execution/category/execution/ethereum/chain/chain_config.h")
         .header("../monad-execution/category/rpc/monad_executor.h")
@@ -33,7 +46,6 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("ethcall.rs"))
         .expect("Couldn't write bindings!");

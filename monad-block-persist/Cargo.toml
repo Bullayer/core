@@ -15,8 +15,4 @@ monad-types = { workspace = true }
 monad-validator = { workspace = true }
 
 alloy-rlp = {workspace = true }
-hex = { workspace = true }
-
-[dev-dependencies]
-inotify = { workspace = true }
-tempfile = { workspace = true }
+rocksdb = { workspace = true }

@@ -10,7 +10,8 @@ use std::collections::VecDeque;
 use alloy_primitives::B256;
 use monad_types::{BlockId, SeqNum};
 
-use crate::traits::BlockHashBuffer;
+use crate::traits::{BlockHashBuffer, ExecutionDb};
+use crate::validation::compute_block_hash;
 
 const HASH_BUFFER_SIZE: usize = 256;
 
@@ -62,17 +63,26 @@ impl BlockHashBufferFinalized {
 
     /// Initialize buffer from DB: load up to 256 historical block hashes.
     /// Corresponds to C++ init_block_hash_buffer_from_triedb.
-    pub fn init_from_db(&mut self, db: &dyn crate::traits::ExecutionDb, seq_num: SeqNum) {
+    pub fn init_from_db(&mut self, db: &mut dyn ExecutionDb, seq_num: SeqNum) {
         let start = if seq_num.0 < HASH_BUFFER_SIZE as u64 {
             SeqNum(0)
         } else {
             seq_num - SeqNum(HASH_BUFFER_SIZE as u64)
         };
-        // In mock phase, we can't load real hashes from DB.
-        // Set n to seq_num so the buffer is "primed" for future writes.
-        self.n = seq_num;
-        let _ = (start, db);
-        // TO-Implement
+
+        self.n = start;
+        for n in start.0..seq_num.0 {
+            let sn = SeqNum(n);
+            let dummy_block_id = BlockId(monad_types::Hash([0u8; 32]));
+            db.set_block_and_prefix(sn, dummy_block_id);
+            let header = db.read_eth_header();
+            if header.number == n {
+                let hash = compute_block_hash(&header);
+                self.set(sn, hash);
+            } else {
+                self.set(sn, B256::ZERO);
+            }
+        }
     }
 }
 
@@ -260,7 +270,18 @@ impl BlockHashChain {
             .iter()
             .position(|p| p.block_id == block_id);
 
-        let pos = winner_pos.expect("BlockHashChain::finalize: block_id not in proposals");
+        let pos = match winner_pos {
+            Some(p) => p,
+            None => {
+                // Block was not proposed (e.g. skipped during execution validation).
+                // Log and skip — the finalized buffer stays at its current n.
+                tracing::warn!(
+                    ?block_id,
+                    "BlockHashChain::finalize: block_id not in proposals, skipping"
+                );
+                return;
+            }
+        };
 
         assert_eq!(
             self.proposals[pos].buf.n() - SeqNum(1),

@@ -39,6 +39,7 @@ use monad_eth_block_policy::EthBlockPolicy;
 use monad_eth_block_validator::EthBlockValidator;
 use monad_eth_txpool_executor::EthTxPoolExecutor;
 use monad_rpc::txpool::channel_bridge::EthTxPoolChannelBridge;
+use monad_execution_db::RethExecutionDb;
 use monad_execution_engine::engine::ExecutionEngine;
 use monad_execution_engine::mock::{
     db::InMemoryExecutionDb, executor::MockBlockExecutor,
@@ -61,7 +62,6 @@ use monad_state::{MonadMessage, MonadStateBuilder, VerifiedMonadMessage};
 use monad_state_backend::StateBackendThreadClient;
 use monad_state_backend_cache::StateBackendCache;
 use monad_statesync::StateSync;
-use monad_triedb_utils::TriedbReader;
 use monad_types::{DropTimer, Epoch, NodeId, Round, SeqNum, GENESIS_SEQ_NUM};
 use monad_updaters::{
     config_file::ConfigFile, config_loader::ConfigLoader, loopback::LoopbackExecutor,
@@ -202,21 +202,56 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         )
     };
 
+    let chain_spec = Arc::new(reth_chainspec::ChainSpecBuilder::mainnet().build());
+    let execution_db = RethExecutionDb::open_with_runtime(
+        &node_state.execution_db_path,
+        chain_spec,
+        reth_tasks::Runtime::test(),
+    ).expect("failed to open execution database");
+
+    // Initialize genesis block in MDBX if this is a fresh database.
+    // The genesis header (block 0) must exist before the state backend can serve any queries.
+    {
+        use alloy_consensus::{Header as EthHeader, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH};
+        use alloy_primitives::{B256, B64, Bloom, U256};
+        let genesis_header = EthHeader {
+            parent_hash: B256::ZERO,
+            ommers_hash: EMPTY_OMMER_ROOT_HASH,
+            beneficiary: alloy_primitives::Address::ZERO,
+            state_root: EMPTY_ROOT_HASH,
+            transactions_root: EMPTY_ROOT_HASH,
+            receipts_root: EMPTY_ROOT_HASH,
+            logs_bloom: Bloom::default(),
+            difficulty: U256::ZERO,
+            number: 0,
+            gas_limit: 30_000_000,
+            gas_used: 0,
+            timestamp: 0,
+            extra_data: Default::default(),
+            mix_hash: B256::ZERO,
+            nonce: B64::ZERO,
+            base_fee_per_gas: Some(1_000_000_000), // 1 gwei
+            withdrawals_root: Some(EMPTY_ROOT_HASH),
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_block_root: None,
+            requests_hash: None,
+        };
+        execution_db
+            .init_genesis(&genesis_header, &Default::default(), &Default::default())
+            .expect("failed to initialize genesis block");
+    }
+
     let state_backend = StateBackendThreadClient::new({
-        let triedb_path = node_state.triedb_path.clone();
-
-        move || {
-            let triedb_handle =
-                TriedbReader::try_new(triedb_path.as_path()).expect("triedb should exist in path");
-
-            StateBackendCache::new(triedb_handle, SeqNum(EXECUTION_DELAY))
-        }
+        let reth_backend: monad_execution_db::RethStateBackend<SignatureType, SignatureCollectionType> =
+            execution_db.clone_state_backend();
+        move || StateBackendCache::new(reth_backend, SeqNum(EXECUTION_DELAY))
     });
 
-    let traversable_db = std::sync::Arc::new(InMemoryExecutionDb::new());
+    let traversable_db = execution_db.clone_traversable();
     let (execution_engine, execution_event_rx, statesync_provider) =
         ExecutionEngine::<SignatureType, SignatureCollectionType>::start(
-            Box::new(InMemoryExecutionDb::new()),
+            Box::new(execution_db),
             Box::new(MockBlockExecutor::new()),
             traversable_db,
         );
@@ -266,17 +301,18 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             let rpc_chain_id = node_state.node_config.chain_id;
 
             let node_config_str = node_state.node_config_path.display().to_string();
-            let triedb_str = node_state.triedb_path.display().to_string();
             let rpc_port_str = node_state.rpc_port.to_string();
             let ws_port_str = node_state.rpc_ws_port.to_string();
             let worker_threads_str = node_state.rpc_worker_threads.to_string();
             let exec_event_str = node_state.exec_event_path.as_ref().map(|p| p.display().to_string());
             let otel_str = node_state.otel_endpoint_interval.as_ref().map(|(ep, _)| ep.clone());
 
+            // Note: --triedb-path is intentionally omitted here. The C++ eth_call executor
+            // is not yet wired up in this Rust-only build; eth_call/eth_trace RPC endpoints
+            // will return "not supported" errors but the node will operate normally.
             let mut parse_args: Vec<String> = vec![
                 "monad-rpc".into(),
                 "--node-config".into(), node_config_str,
-                "--triedb-path".into(), triedb_str,
                 "--rpc-addr".into(), node_state.rpc_addr.clone(),
                 "--rpc-port".into(), rpc_port_str,
                 "--worker-threads".into(), worker_threads_str,

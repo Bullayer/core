@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
 use alloy_primitives::{Address, B256};
 use monad_eth_types::{EthAccount, Ommer, ProposedEthHeader, Withdrawal};
+use revm::database::states::BundleState;
 
 #[derive(Clone, Debug)]
 pub struct Transaction {
@@ -45,6 +46,7 @@ pub struct BlockExecOutput {
     pub eth_block_hash: B256,
     pub transactions: Vec<TxEnvelope>,
     pub receipts: Vec<ReceiptEnvelope>,
+    pub bundle: BundleState,
 }
 
 #[derive(Clone, Debug, Default)]

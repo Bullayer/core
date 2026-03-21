@@ -3,14 +3,13 @@
 // Licensed under the GNU General Public License v3.0.
 
 use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, Bytes};
 use monad_types::{BlockId, SeqNum};
+use revm::database::states::BundleState;
 
 use monad_eth_types::EthAccount;
 
-use crate::types::{
-    Block, BlockExecOutput, CodeMap, StateDeltas,
-};
+use crate::types::{Block, BlockExecOutput};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
@@ -38,6 +37,7 @@ pub trait ExecutionDb: Send + Sync {
 
     fn read_account(&self, address: &Address) -> Option<EthAccount>;
     fn read_storage(&self, address: &Address, slot: &B256) -> B256;
+    fn read_code(&self, code_hash: &B256) -> Option<Bytes>;
     fn read_eth_header(&self) -> Header;
 
     fn set_block_and_prefix(&mut self, seq_num: SeqNum, block_id: BlockId);
@@ -46,8 +46,7 @@ pub trait ExecutionDb: Send + Sync {
         &mut self,
         block_id: BlockId,
         header: &Header,
-        state_deltas: &StateDeltas,
-        code: &CodeMap,
+        bundle: BundleState,
         receipts: &[ReceiptEnvelope],
         transactions: &[TxEnvelope],
     );

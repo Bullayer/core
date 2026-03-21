@@ -8,7 +8,10 @@
 
 use std::collections::VecDeque;
 
+use alloy_primitives::B256;
 use monad_types::{BlockId, SeqNum};
+use revm::database::states::{AccountStatus, BundleState};
+use revm::primitives::U256;
 
 use crate::types::StateDeltas;
 
@@ -253,6 +256,39 @@ pub fn extract_deletions(state_deltas: &StateDeltas) -> Vec<Deletion> {
                 });
             }
             _ => {}
+        }
+    }
+
+    deletions
+}
+
+/// Extract deletions from a revm `BundleState`.
+pub fn extract_deletions_from_bundle(bundle: &BundleState) -> Vec<Deletion> {
+    let mut deletions = Vec::new();
+
+    for (address, account) in &bundle.state {
+        let is_destroyed = matches!(account.status, AccountStatus::Destroyed | AccountStatus::DestroyedChanged | AccountStatus::DestroyedAgain);
+
+        if is_destroyed {
+            deletions.push(Deletion {
+                address: *address,
+                key: None,
+            });
+            continue;
+        }
+
+        if account.info.is_some() {
+            for (slot, storage_slot) in &account.storage {
+                if storage_slot.present_value == U256::ZERO
+                    && storage_slot.previous_or_original_value != U256::ZERO
+                {
+                    let key = B256::from(slot.to_be_bytes());
+                    deletions.push(Deletion {
+                        address: *address,
+                        key: Some(key),
+                    });
+                }
+            }
         }
     }
 

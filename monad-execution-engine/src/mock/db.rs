@@ -4,17 +4,18 @@
 
 use std::collections::{HashMap, HashSet};
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, Bytes};
 use monad_types::{BlockId, SeqNum};
 
 use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
+
+use alloy_primitives::U256;
+use revm::database::states::BundleState;
 
 use crate::statesync::{StateSyncApplierDb, StateSyncBatch, StateSyncTraversable};
 use crate::statesync::types::SyncUpsertType;
 use crate::traits::ExecutionDb;
 use monad_eth_types::EthAccount;
-
-use crate::types::{CodeMap, StateDeltas};
 
 pub struct InMemoryExecutionDb {
     accounts: HashMap<Address, EthAccount>,
@@ -76,6 +77,10 @@ impl ExecutionDb for InMemoryExecutionDb {
             .unwrap_or(B256::ZERO)
     }
 
+    fn read_code(&self, code_hash: &B256) -> Option<Bytes> {
+        self.code.get(code_hash).map(|v| Bytes::from(v.clone()))
+    }
+
     fn read_eth_header(&self) -> Header {
         self.headers
             .get(&self.current_seq_num)
@@ -92,29 +97,43 @@ impl ExecutionDb for InMemoryExecutionDb {
         &mut self,
         block_id: BlockId,
         header: &Header,
-        state_deltas: &StateDeltas,
-        code: &CodeMap,
+        bundle: BundleState,
         _receipts: &[ReceiptEnvelope],
         _transactions: &[TxEnvelope],
     ) {
-        for (address, delta) in state_deltas {
-            if let Some(new_acct) = &delta.new_account {
-                self.accounts.insert(*address, new_acct.clone());
-            } else if delta.old_account.is_some() && delta.new_account.is_none() {
-                self.accounts.remove(address);
+        for (address, account) in &bundle.state {
+            match &account.info {
+                Some(info) => {
+                    let code_hash = if info.code_hash == alloy_consensus::constants::KECCAK_EMPTY {
+                        None
+                    } else {
+                        Some(info.code_hash.0)
+                    };
+                    self.accounts.insert(*address, EthAccount {
+                        nonce: info.nonce,
+                        balance: info.balance,
+                        code_hash,
+                        is_delegated: false,
+                    });
+                }
+                None => {
+                    self.accounts.remove(address);
+                }
             }
-            for (slot, storage_delta) in &delta.storage {
-                if storage_delta.new_value == B256::ZERO {
-                    self.storage.remove(&(*address, *slot));
+
+            for (slot, storage_slot) in &account.storage {
+                let key = B256::from(slot.to_be_bytes());
+                let value = B256::from(storage_slot.present_value.to_be_bytes());
+                if storage_slot.present_value == U256::ZERO {
+                    self.storage.remove(&(*address, key));
                 } else {
-                    self.storage
-                        .insert((*address, *slot), storage_delta.new_value);
+                    self.storage.insert((*address, key), value);
                 }
             }
         }
 
-        for (hash, data) in code {
-            self.code.insert(*hash, data.clone());
+        for (hash, bytecode) in &bundle.contracts {
+            self.code.insert(*hash, bytecode.bytes_slice().to_vec());
         }
 
         let sn = SeqNum(header.number);

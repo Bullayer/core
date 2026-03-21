@@ -13,12 +13,14 @@ use monad_types::{BlockId, FinalizedHeader, SeqNum};
 use monad_validator::signature_collection::SignatureCollection;
 use tokio::sync::{broadcast, mpsc};
 
+use monad_types::GENESIS_BLOCK_ID;
+
 use crate::block_hash::{BlockHashBufferFinalized, BlockHashChain};
 use crate::command::ExecutionCommand;
 use crate::events::ExecutionEvent;
 use crate::propose::propose_block;
 use crate::traits::{BlockExecutor, ExecutionDb};
-use crate::validation::validate_delayed_execution_results;
+use crate::validation::{compute_block_hash, validate_delayed_execution_results};
 
 struct ToExecute<ST, SCT>
 where
@@ -49,7 +51,16 @@ where
 
     let mut block_hash_buffer = BlockHashBufferFinalized::new();
     if finalized_n != SeqNum::MAX && finalized_n > SeqNum(0) {
-        block_hash_buffer.init_from_db(&*db, finalized_n);
+        block_hash_buffer.init_from_db(&mut *db, finalized_n);
+    } else if finalized_n == SeqNum(0) {
+        // Fresh DB: seed genesis block (seq 0) hash so delayed-execution-result
+        // validation for blocks that carry a reference to genesis can succeed.
+        db.set_block_and_prefix(SeqNum(0), GENESIS_BLOCK_ID);
+        let genesis_header = db.read_eth_header();
+        if genesis_header.number == 0 {
+            let genesis_hash = compute_block_hash(&genesis_header);
+            block_hash_buffer.set(SeqNum(0), genesis_hash);
+        }
     }
     let mut block_hash_chain = BlockHashChain::new(block_hash_buffer);
 
@@ -164,8 +175,16 @@ where
                 block_id: item.block_id,
             });
 
+            // Finalization implies the block's own execution is verified.
+            db.update_verified_block(item.seq_num);
+            let _ = event_tx.send(ExecutionEvent::BlockVerified {
+                seq_num: item.seq_num,
+            });
+
+            // Additionally verify any delayed execution results carried by this block,
+            // as long as they differ from the block being finalized.
             if let Some(&last_verified) = item.verified_blocks.last() {
-                if last_verified != SeqNum::MAX {
+                if last_verified != SeqNum::MAX && last_verified != item.seq_num {
                     db.update_verified_block(last_verified);
                     let _ = event_tx.send(ExecutionEvent::BlockVerified {
                         seq_num: last_verified,

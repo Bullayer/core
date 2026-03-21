@@ -38,6 +38,16 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib={}", target);
     }
 
+    if !build_execution_lib {
+        // Real C++ triedb library is not available; compile stub implementations
+        // so the linker can resolve the triedb_* symbols without the C++ backend.
+        // All stub functions return "not found" / "empty" values safely at runtime.
+        println!("cargo:rerun-if-changed=triedb_stubs.c");
+        cc::Build::new()
+            .file("triedb_stubs.c")
+            .compile("triedb_stubs");
+    }
+
     let bindings = bindgen::Builder::default()
         .header("triedb-driver/include/triedb.h")
         // invalidate on header change

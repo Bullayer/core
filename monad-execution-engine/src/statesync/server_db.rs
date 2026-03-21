@@ -8,14 +8,14 @@
 use std::sync::{Arc, RwLock};
 
 use alloy_consensus::{Header, ReceiptEnvelope, TxEnvelope};
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, Bytes};
 use monad_eth_types::EthAccount;
 use monad_types::{BlockId, SeqNum};
+use revm::database::states::BundleState;
 
 use crate::traits::ExecutionDb;
-use crate::types::{CodeMap, StateDeltas};
 
-use super::deletion_tracker::{extract_deletions, FinalizedDeletions, ProposedDeletions};
+use super::deletion_tracker::{extract_deletions_from_bundle, FinalizedDeletions, ProposedDeletions};
 use super::server::handle_sync_request;
 use super::{
     StateSyncError, StateSyncProvider, StateSyncRequest, StateSyncResult, StateSyncTraversable,
@@ -62,6 +62,10 @@ impl ExecutionDb for StateSyncServerDb {
         self.inner.read_storage(address, slot)
     }
 
+    fn read_code(&self, code_hash: &B256) -> Option<Bytes> {
+        self.inner.read_code(code_hash)
+    }
+
     fn read_eth_header(&self) -> Header {
         self.inner.read_eth_header()
     }
@@ -74,16 +78,15 @@ impl ExecutionDb for StateSyncServerDb {
         &mut self,
         block_id: BlockId,
         header: &Header,
-        state_deltas: &StateDeltas,
-        code: &CodeMap,
+        bundle: BundleState,
         receipts: &[ReceiptEnvelope],
         transactions: &[TxEnvelope],
     ) {
-        let deletions = extract_deletions(state_deltas);
+        let deletions = extract_deletions_from_bundle(&bundle);
         self.proposed_deletions
             .push(SeqNum(header.number), block_id, deletions);
         self.inner
-            .commit(block_id, header, state_deltas, code, receipts, transactions);
+            .commit(block_id, header, bundle, receipts, transactions);
     }
 
     fn finalize(&mut self, seq_num: SeqNum, block_id: BlockId) {

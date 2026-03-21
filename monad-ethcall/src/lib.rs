@@ -13,41 +13,103 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{
-    collections::HashMap,
-    ffi::{CStr, CString},
-    path::Path,
-};
+use std::collections::HashMap;
 
 use alloy_consensus::{Header, Transaction as _, TxEnvelope};
-use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
-use alloy_rlp::Encodable;
 use alloy_sol_types::decode_revert_reason;
-use bindings::monad_executor_result;
-use futures::channel::oneshot::{channel, Sender};
-use monad_chain_config::{
-    ETHEREUM_MAINNET_CHAIN_ID, MONAD_DEVNET_CHAIN_ID, MONAD_MAINNET_CHAIN_ID,
-    MONAD_TESTNET_CHAIN_ID,
-};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
+// ---------------------------------------------------------------------------
+// Stub path: C++ execution submodule not present
+// ---------------------------------------------------------------------------
+
+#[cfg(stub_ethcall_bindings)]
 #[allow(dead_code, non_camel_case_types, non_upper_case_globals)]
 pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/ethcall.rs"));
 }
 
+/// Stub pool config used when native C++ execution is not available.
+#[cfg(stub_ethcall_bindings)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PoolConfig {
+    pub num_threads: u32,
+    pub num_fibers: u32,
+    pub timeout_sec: u32,
+    pub queue_limit: u32,
+}
+
+/// Stub executor used when native C++ execution is not available.
+#[cfg(stub_ethcall_bindings)]
+#[derive(Debug)]
+pub struct EthCallExecutor;
+
+#[cfg(stub_ethcall_bindings)]
+unsafe impl Send for EthCallExecutor {}
+#[cfg(stub_ethcall_bindings)]
+unsafe impl Sync for EthCallExecutor {}
+
+#[cfg(stub_ethcall_bindings)]
+impl EthCallExecutor {
+    pub fn new(
+        _low_pool_config: PoolConfig,
+        _high_pool_config: PoolConfig,
+        _block_pool_config: PoolConfig,
+        _tx_exec_num_fibers: u32,
+        _node_lru_max_mem: u64,
+        _triedb_path: &std::path::Path,
+    ) -> Self {
+        panic!("monad-ethcall: native C++ execution is not available in this build")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native path: C++ execution submodule present
+// ---------------------------------------------------------------------------
+
+#[cfg(not(stub_ethcall_bindings))]
+use std::{
+    ffi::{CStr, CString},
+    path::Path,
+};
+#[cfg(not(stub_ethcall_bindings))]
+use alloy_eips::eip2718::Encodable2718;
+#[cfg(not(stub_ethcall_bindings))]
+use alloy_rlp::Encodable;
+#[cfg(not(stub_ethcall_bindings))]
+use bindings::monad_executor_result;
+#[cfg(not(stub_ethcall_bindings))]
+use futures::channel::oneshot::{channel, Sender};
+#[cfg(not(stub_ethcall_bindings))]
+use monad_chain_config::{
+    ETHEREUM_MAINNET_CHAIN_ID, MONAD_DEVNET_CHAIN_ID, MONAD_MAINNET_CHAIN_ID,
+    MONAD_TESTNET_CHAIN_ID,
+};
+#[cfg(not(stub_ethcall_bindings))]
+use tracing::{info, warn};
+
+#[cfg(not(stub_ethcall_bindings))]
+#[allow(dead_code, non_camel_case_types, non_upper_case_globals)]
+pub mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/ethcall.rs"));
+}
+
+#[cfg(not(stub_ethcall_bindings))]
 pub use bindings::monad_executor_pool_config as PoolConfig;
 
+#[cfg(not(stub_ethcall_bindings))]
 #[derive(Debug)]
 pub struct EthCallExecutor {
     eth_call_executor: *mut bindings::monad_executor,
 }
 
+#[cfg(not(stub_ethcall_bindings))]
 unsafe impl Send for EthCallExecutor {}
+#[cfg(not(stub_ethcall_bindings))]
 unsafe impl Sync for EthCallExecutor {}
 
+#[cfg(not(stub_ethcall_bindings))]
 impl EthCallExecutor {
     pub fn new(
         low_pool_config: PoolConfig,
@@ -77,6 +139,7 @@ impl EthCallExecutor {
     }
 }
 
+#[cfg(not(stub_ethcall_bindings))]
 impl Drop for EthCallExecutor {
     fn drop(&mut self) {
         info!("dropping eth_call_executor");
@@ -168,6 +231,7 @@ pub struct RevertCallResult {
     pub trace: Vec<u8>,
 }
 
+#[cfg(not(stub_ethcall_bindings))]
 pub struct SenderContext {
     sender: Sender<*mut monad_executor_result>,
 }
@@ -177,6 +241,7 @@ pub struct SenderContext {
 ///
 /// This function is called when the eth_call is finished and the result is returned over the
 /// channel
+#[cfg(not(stub_ethcall_bindings))]
 pub unsafe extern "C" fn eth_call_submit_callback(
     result: *mut monad_executor_result,
     user: *mut std::ffi::c_void,
@@ -188,6 +253,23 @@ pub unsafe extern "C" fn eth_call_submit_callback(
 
 pub type StateOverrideSet = HashMap<Address, StateOverrideObject>;
 
+#[cfg(stub_ethcall_bindings)]
+pub async fn eth_call(
+    _chain_id: u64,
+    _transaction: TxEnvelope,
+    _block_header: Header,
+    _sender: Address,
+    _block_number: u64,
+    _block_id: Option<[u8; 32]>,
+    _eth_call_executor: &EthCallExecutor,
+    _state_override_set: &StateOverrideSet,
+    _tracer: MonadTracer,
+    _gas_specified: bool,
+) -> CallResult {
+    panic!("monad-ethcall: native C++ execution is not available in this build")
+}
+
+#[cfg(not(stub_ethcall_bindings))]
 pub async fn eth_call(
     chain_id: u64,
     transaction: TxEnvelope,
@@ -464,6 +546,22 @@ pub fn decode_revert_message(output_data: &[u8]) -> Option<String> {
     })
 }
 
+#[cfg(stub_ethcall_bindings)]
+pub async fn eth_trace_block_or_transaction(
+    _chain_id: u64,
+    _block_header: Header,
+    _block_number: u64,
+    _block_id: Option<[u8; 32]>,
+    _parent_id: Option<[u8; 32]>,
+    _grandparent_id: Option<[u8; 32]>,
+    _transaction_index: i64,
+    _eth_call_executor: &EthCallExecutor,
+    _tracer: MonadTracer,
+) -> CallResult {
+    panic!("monad-ethcall: native C++ execution is not available in this build")
+}
+
+#[cfg(not(stub_ethcall_bindings))]
 pub async fn eth_trace_block_or_transaction(
     chain_id: u64,
     block_header: Header,

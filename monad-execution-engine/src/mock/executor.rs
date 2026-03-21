@@ -4,6 +4,7 @@
 
 use alloy_consensus::Header;
 use alloy_primitives::{B256, Bytes, U256};
+use revm::database::states::BundleState;
 
 use crate::traits::{BlockExecutor, BlockHashBuffer, ExecutionDb, ExecutionError};
 use crate::types::{Block, BlockExecOutput};
@@ -60,6 +61,7 @@ impl BlockExecutor for MockBlockExecutor {
             eth_block_hash: block_hash,
             transactions: Vec::new(),
             receipts: Vec::new(),
+            bundle: BundleState::default(),
         })
     }
 }
