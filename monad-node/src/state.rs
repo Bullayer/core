@@ -119,8 +119,7 @@ impl NodeState {
             hex::encode(bls_key.pubkey().compress())
         );
 
-        let node_config: MonadNodeConfig =
-            toml::from_str(&std::fs::read_to_string(&node_config_path)?)?;
+        let node_config: MonadNodeConfig = toml::from_str(&std::fs::read_to_string(&node_config_path)?)?;
 
         if !matches!(
             forkpoint_config_path.extension().and_then(OsStr::to_str),
@@ -162,10 +161,6 @@ impl NodeState {
                 .expect("time went backwards")
                 .as_millis()
         ));
-
-        let execution_db_path = execution_db_path.unwrap_or_else(|| {
-            ledger_path.parent().unwrap_or(Path::new(".")).join("execution_db")
-        });
 
         let otel_endpoint_interval = match (otel_endpoint, record_metrics_interval_seconds) {
             (Some(otel_endpoint), Some(record_metrics_interval_seconds)) => Some((

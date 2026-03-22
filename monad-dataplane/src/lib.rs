@@ -134,8 +134,7 @@ impl DataplaneBuilder {
 
     pub fn with_tcp_rps_burst(mut self, rps: u32, burst: u32) -> Self {
         self.tcp_config.rate_limit.rps = NonZeroU32::new(rps).expect("rps must be non-zero");
-        self.tcp_config.rate_limit.rps_burst =
-            NonZeroU32::new(burst).expect("burst must be non-zero");
+        self.tcp_config.rate_limit.rps_burst = NonZeroU32::new(burst).expect("burst must be non-zero");
         self
     }
 

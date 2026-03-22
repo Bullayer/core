@@ -43,22 +43,15 @@ mod sync_peers;
 #[serde(deny_unknown_fields)]
 #[serde(bound = "")]
 pub struct NodeConfig<ST: CertificateSignatureRecoverable> {
-    /////////////////////////////////
-    // NODE-SPECIFIC CONFIGURATION //
-    /////////////////////////////////
     pub node_name: String,
     pub network_name: String,
 
     #[serde(deserialize_with = "deserialize_eth_address_from_str")]
     pub beneficiary: Address,
 
-    // pub ipc_tx_batch_size: u32,
-    // pub ipc_max_queued_batches: u8,
-    // pub ipc_queued_batches_watermark: u8,
-
     pub statesync_threshold: u16,
     pub statesync_max_concurrent_requests: u8,
-    pub statesync_request_timeout: Duration,
+    pub statesync_request_timeout_seconds: u64,
 
     pub bootstrap: NodeBootstrapConfig<ST>,
     pub fullnode_dedicated: FullNodeConfig<CertificateSignaturePubKey<ST>>,
@@ -70,9 +63,6 @@ pub struct NodeConfig<ST: CertificateSignatureRecoverable> {
 
     pub fullnode_raptorcast: FullNodeRaptorCastConfig<CertificateSignaturePubKey<ST>>,
 
-    ////////////////////////////////
-    // NETWORK-WIDE CONFIGURATION //
-    ////////////////////////////////
     pub chain_id: u64,
 }
 

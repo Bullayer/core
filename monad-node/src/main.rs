@@ -101,7 +101,7 @@ const EXECUTION_DELAY: u64 = 3;
 fn main() {
     let mut cmd = Cli::command();
 
-    let node_state = NodeState::setup(&mut cmd).unwrap_or_else(|e| cmd.error(e.kind(), e).exit());
+    let node_state: NodeState = NodeState::setup(&mut cmd).unwrap_or_else(|e| cmd.error(e.kind(), e).exit());
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(8)
@@ -353,8 +353,8 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             statesync_provider,
             state_sync_init_peers,
             node_state.node_config.statesync_max_concurrent_requests.into(),
-            node_state.node_config.statesync_request_timeout,
-            node_state.node_config.statesync_request_timeout,
+            Duration::from_secs(node_state.node_config.statesync_request_timeout_seconds),
+            Duration::from_secs(node_state.node_config.statesync_request_timeout_seconds),
         ),
         config_loader: ConfigLoader::new(node_state.node_config_path),
     };
@@ -638,8 +638,7 @@ where
             network_config.tcp_rate_limit_burst,
         );
 
-    let mut udp_sockets: Vec<(UdpSocketId, std::net::SocketAddr)> =
-        vec![(UdpSocketId::Raptorcast, bind_address)];
+    let mut udp_sockets: Vec<(UdpSocketId, std::net::SocketAddr)> = vec![(UdpSocketId::Raptorcast, bind_address)];
     if let Some(auth_addr) = authenticated_bind_address {
         udp_sockets.push((UdpSocketId::AuthenticatedRaptorcast, auth_addr));
     }

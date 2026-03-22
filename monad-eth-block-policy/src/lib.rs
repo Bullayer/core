@@ -465,8 +465,8 @@ where
     CRT: ChainRevision,
 {
     pub fn new(
-        last_commit: SeqNum, // TODO deprecate
-        execution_delay: u64,
+        last_commit: SeqNum,
+        execution_delay: u64
     ) -> Self {
         let cache_max_size = execution_delay.saturating_mul(2);
         Self {

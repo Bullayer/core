@@ -955,7 +955,7 @@ where
             statesync_expand_to_group: self.statesync_expand_to_group,
         };
 
-        let mut init_cmds = Vec::new();
+        let mut init_cmds: Vec<Command<MonadEvent<ST, SCT, EPT>, VerifiedMonadMessage<ST, SCT, EPT>, ST, SCT, EPT, BPT, SBT, CCT, CRT>> = Vec::new();
 
         let Forkpoint(Checkpoint {
             root,
@@ -1062,7 +1062,7 @@ where
                     ValidatorMapping::new(validator_set_data.validators.get_cert_pubkeys()),
                 );
 
-                let mut cmds = vec![
+                let mut cmds: Vec<Command<MonadEvent<ST, SCT, EPT>, VerifiedMonadMessage<ST, SCT, EPT>, ST, SCT, EPT, BPT, SBT, CCT, CRT>> = vec![
                     Command::RouterCommand(RouterCommand::AddEpochValidatorSet {
                         epoch: validator_set_data.epoch,
                         validator_set: validator_set_data.validators.get_stakes(),
@@ -1414,9 +1414,7 @@ where
 
             if delay_executed {
                 // TODO assert state root matches?
-                return self.update(MonadEvent::StateSyncEvent(StateSyncEvent::DoneSync(
-                    delay_seq_num,
-                )));
+                return self.update(MonadEvent::StateSyncEvent(StateSyncEvent::DoneSync(delay_seq_num)));
             }
 
             let delayed_execution_result = block_buffer
