@@ -37,13 +37,14 @@ struct ToFinalize {
     verified_blocks: Vec<SeqNum>,
 }
 
-pub async fn runloop_monad<ST, SCT>(
-    mut db: Box<dyn ExecutionDb>,
+pub async fn runloop_monad<DB, ST, SCT>(
+    mut db: DB,
     executor: Box<dyn BlockExecutor>,
     mut cmd_rx: mpsc::UnboundedReceiver<ExecutionCommand<ST, SCT>>,
     event_tx: broadcast::Sender<ExecutionEvent>,
 )
 where
+    DB: ExecutionDb + 'static,
     ST: CertificateSignatureRecoverable + 'static,
     SCT: SignatureCollection<NodeIdPubKey = CertificateSignaturePubKey<ST>> + 'static,
 {
@@ -51,7 +52,7 @@ where
 
     let mut block_hash_buffer = BlockHashBufferFinalized::new();
     if finalized_n != SeqNum::MAX && finalized_n > SeqNum(0) {
-        block_hash_buffer.init_from_db(&mut *db, finalized_n);
+        block_hash_buffer.init_from_db(&mut db, finalized_n);
     } else if finalized_n == SeqNum(0) {
         // Fresh DB: seed genesis block (seq 0) hash so delayed-execution-result
         // validation for blocks that carry a reference to genesis can succeed.
@@ -78,7 +79,7 @@ where
         match first_cmd {
             None => break,
             Some(ExecutionCommand::Shutdown) => break,
-            Some(cmd) => classify_command(cmd, &*db, &mut to_execute, &mut to_finalize),
+            Some(cmd) => classify_command(cmd, &db, &mut to_execute, &mut to_finalize),
         }
 
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -87,7 +88,7 @@ where
                     tracing::info!("runloop received shutdown");
                     return;
                 }
-                cmd => classify_command(cmd, &*db, &mut to_execute, &mut to_finalize),
+                cmd => classify_command(cmd, &db, &mut to_execute, &mut to_finalize),
             }
         }
 
@@ -124,7 +125,7 @@ where
             match propose_block(
                 &item.block,
                 &mut block_hash_chain,
-                &mut *db,
+                &mut db,
                 &*executor,
                 seq_num == start_seq_num,
             ) {

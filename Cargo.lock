@@ -5227,8 +5227,6 @@ dependencies = [
 name = "monad-cxx"
 version = "0.1.0"
 dependencies = [
- "bindgen 0.71.1",
- "cmake",
  "tracing",
 ]
 
@@ -5786,6 +5784,7 @@ name = "monad-node"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-genesis",
  "alloy-primitives",
  "alloy-rlp",
  "chrono",
@@ -5805,6 +5804,7 @@ dependencies = [
  "monad-eth-block-policy",
  "monad-eth-block-validator",
  "monad-eth-txpool-executor",
+ "monad-eth-types",
  "monad-execution-db",
  "monad-execution-engine",
  "monad-executor",
@@ -5837,6 +5837,7 @@ dependencies = [
  "reqwest",
  "reth-chainspec",
  "reth-tasks",
+ "serde_json",
  "thiserror 1.0.69",
  "tikv-jemallocator",
  "tokio",

@@ -42,7 +42,7 @@ where
         let (event_tx, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         let finalized_deletions = Arc::new(RwLock::new(FinalizedDeletions::new()));
-        let server_db = Box::new(StateSyncServerDb::new(db, Arc::clone(&finalized_deletions)));
+        let server_db = StateSyncServerDb::new(db, Arc::clone(&finalized_deletions));
 
         let provider: Arc<dyn StateSyncProvider> = Arc::new(LiveStateSyncProvider::new(
             traversable,
@@ -51,7 +51,7 @@ where
 
         let event_tx_clone = event_tx.clone();
         let handle = tokio::spawn(async move {
-            runloop_monad::<ST, SCT>(server_db, executor, cmd_rx, event_tx_clone).await;
+            runloop_monad::<StateSyncServerDb, ST, SCT>(server_db, executor, cmd_rx, event_tx_clone).await;
         });
 
         let engine = Self {

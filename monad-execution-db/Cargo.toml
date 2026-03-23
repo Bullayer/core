@@ -48,6 +48,6 @@ criterion = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }
 
-[[bench]]
-name = "execution_db_bench"
-harness = false
+# [[bench]]
+# name = "execution_db_bench"
+# harness = false

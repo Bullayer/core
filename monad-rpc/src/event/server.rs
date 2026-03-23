@@ -16,7 +16,6 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::B256;
-use itertools::Itertools;
 use monad_execution_engine::events::{BlockCommitState, ExecutionEvent};
 use monad_types::BlockId;
 use tokio::sync::broadcast;
@@ -409,10 +408,12 @@ fn broadcast_block_updates(
         |notification| notification.map(JsonSerialized::new_shared),
     );
 
+    // TODO: switch back to zip_eq once MockBlockExecutor is replaced —
+    // it returns no receipts for system-call txs, causing a length mismatch.
     let transactions = block
         .transactions
         .iter()
-        .zip_eq(block.receipts.iter())
+        .zip(block.receipts.iter())
         .map(|(tx, tx_receipt)| {
             let logs = tx_receipt
                 .logs()
@@ -427,7 +428,7 @@ fn broadcast_block_updates(
                         |notification| notification.map(JsonSerialized::new_shared),
                     )
                 })
-                .collect_vec();
+                .collect::<Vec<_>>();
 
             (
                 JsonSerialized::new_shared(tx.clone()),
@@ -435,7 +436,7 @@ fn broadcast_block_updates(
                 logs.into_boxed_slice(),
             )
         })
-        .collect_vec();
+        .collect::<Vec<_>>();
 
     broadcast_event(
         broadcast_tx,

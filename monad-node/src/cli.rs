@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long)]
     pub ledger_path: PathBuf,
 
+    /// Path to genesis.json (standard Ethereum genesis format with alloc, chainId, etc.)
+    #[arg(long)]
+    pub genesis_config: PathBuf,
+
     /// Set the path for the reth execution database (MDBX + static files)
     #[arg(long)]
     pub execution_db_path: PathBuf,

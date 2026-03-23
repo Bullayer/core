@@ -202,45 +202,41 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         )
     };
 
-    let chain_spec = Arc::new(reth_chainspec::ChainSpecBuilder::mainnet().build());
-    let execution_db = RethExecutionDb::open_with_runtime(
-        &node_state.execution_db_path,
-        chain_spec,
-        reth_tasks::Runtime::test(),
-    ).expect("failed to open execution database");
+    let (_chain_spec, execution_db) = {
+        let genesis_json = std::fs::read_to_string(&node_state.genesis_config_path)
+            .unwrap_or_else(|e| {
+                error!(path = ?node_state.genesis_config_path, %e, "failed to read genesis.json");
+                process::exit(1);
+            });
+        let genesis: alloy_genesis::Genesis = serde_json::from_str(&genesis_json)
+            .unwrap_or_else(|e| {
+                error!(%e, "failed to parse genesis.json");
+                process::exit(1);
+            });
 
-    // Initialize genesis block in MDBX if this is a fresh database.
-    // The genesis header (block 0) must exist before the state backend can serve any queries.
-    {
-        use alloy_consensus::{Header as EthHeader, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH};
-        use alloy_primitives::{B256, B64, Bloom, U256};
-        let genesis_header = EthHeader {
-            parent_hash: B256::ZERO,
-            ommers_hash: EMPTY_OMMER_ROOT_HASH,
-            beneficiary: alloy_primitives::Address::ZERO,
-            state_root: EMPTY_ROOT_HASH,
-            transactions_root: EMPTY_ROOT_HASH,
-            receipts_root: EMPTY_ROOT_HASH,
-            logs_bloom: Bloom::default(),
-            difficulty: U256::ZERO,
-            number: 0,
-            gas_limit: 30_000_000,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Default::default(),
-            mix_hash: B256::ZERO,
-            nonce: B64::ZERO,
-            base_fee_per_gas: Some(1_000_000_000), // 1 gwei
-            withdrawals_root: Some(EMPTY_ROOT_HASH),
-            blob_gas_used: None,
-            excess_blob_gas: None,
-            parent_beacon_block_root: None,
-            requests_hash: None,
-        };
-        execution_db
-            .init_genesis(&genesis_header, &Default::default(), &Default::default())
+        let chain_spec = Arc::new(reth_chainspec::ChainSpec::from_genesis(genesis.clone()));
+
+        let db = RethExecutionDb::open_with_runtime(
+            &node_state.execution_db_path,
+            chain_spec.clone(),
+            reth_tasks::Runtime::test(),
+        ).expect("failed to open execution database");
+
+        let genesis_header = chain_spec.genesis_header().clone();
+        let (state_deltas, code_map) = genesis_alloc_to_state_deltas(&genesis.alloc);
+        db.init_genesis(&genesis_header, &state_deltas, &code_map)
             .expect("failed to initialize genesis block");
-    }
+
+        info!(
+            chain_id = chain_spec.chain.id(),
+            genesis_hash = %genesis_header.hash_slow(),
+            alloc_accounts = genesis.alloc.len(),
+            "genesis initialized from {}",
+            node_state.genesis_config_path.display(),
+        );
+
+        (chain_spec, db)
+    };
 
     let state_backend = StateBackendThreadClient::new({
         let reth_backend: monad_execution_db::RethStateBackend<SignatureType, SignatureCollectionType> =
@@ -908,4 +904,58 @@ fn build_otel_meter_provider(
         );
 
     Ok(provider_builder.build())
+}
+
+fn genesis_alloc_to_state_deltas(
+    alloc: &std::collections::BTreeMap<alloy_primitives::Address, alloy_genesis::GenesisAccount>,
+) -> (
+    monad_execution_engine::types::StateDeltas,
+    monad_execution_engine::types::CodeMap,
+) {
+    use alloy_primitives::B256;
+    use monad_eth_types::EthAccount;
+    use monad_execution_engine::types::{AccountDelta, CodeMap, StateDeltas, StorageDelta};
+
+    let mut state_deltas = StateDeltas::new();
+    let mut code_map = CodeMap::new();
+
+    for (address, account) in alloc {
+        let code_hash = account.code.as_ref().map(|code| {
+            let hash = alloy_primitives::keccak256(code);
+            code_map.insert(hash, code.to_vec());
+            hash.0
+        });
+
+        let new_account = EthAccount {
+            nonce: account.nonce.unwrap_or(0),
+            balance: account.balance,
+            code_hash,
+            is_delegated: false,
+        };
+
+        let mut storage = HashMap::new();
+        if let Some(ref genesis_storage) = account.storage {
+            for (slot, value) in genesis_storage {
+                storage.insert(
+                    *slot,
+                    StorageDelta {
+                        old_value: B256::ZERO,
+                        new_value: *value,
+                    },
+                );
+            }
+        }
+
+        state_deltas.insert(
+            *address,
+            AccountDelta {
+                old_account: None,
+                new_account: Some(new_account),
+                storage,
+                incarnation_changed: false,
+            },
+        );
+    }
+
+    (state_deltas, code_map)
 }
