@@ -39,6 +39,7 @@ use monad_eth_block_policy::EthBlockPolicy;
 use monad_eth_block_validator::EthBlockValidator;
 use monad_eth_txpool_executor::EthTxPoolExecutor;
 use monad_rpc::txpool::channel_bridge::EthTxPoolChannelBridge;
+use monad_execution_db::bridge::genesis_alloc_to_state_deltas;
 use monad_execution_db::RethExecutionDb;
 use monad_execution_engine::engine::ExecutionEngine;
 use monad_execution_engine::mock::{
@@ -202,7 +203,8 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         )
     };
 
-    let (_chain_spec, execution_db) = {
+    #[allow(unused_variables)] // chain_spec will be used by RevmBlockExecutor in Phase 2
+    let (chain_spec, execution_db) = {
         let genesis_json = std::fs::read_to_string(&node_state.genesis_config_path)
             .unwrap_or_else(|e| {
                 error!(path = ?node_state.genesis_config_path, %e, "failed to read genesis.json");
@@ -216,10 +218,15 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
 
         let chain_spec = Arc::new(reth_chainspec::ChainSpec::from_genesis(genesis.clone()));
 
+        let reth_runtime = {
+            let config = reth_tasks::RuntimeConfig::default()
+                .with_tokio(reth_tasks::TokioConfig::existing_handle(tokio::runtime::Handle::current()));
+            reth_tasks::RuntimeBuilder::new(config).build().expect("failed to build reth runtime")
+        };
         let db = RethExecutionDb::open_with_runtime(
             &node_state.execution_db_path,
             chain_spec.clone(),
-            reth_tasks::Runtime::test(),
+            reth_runtime,
         ).expect("failed to open execution database");
 
         let genesis_header = chain_spec.genesis_header().clone();
@@ -906,56 +913,3 @@ fn build_otel_meter_provider(
     Ok(provider_builder.build())
 }
 
-fn genesis_alloc_to_state_deltas(
-    alloc: &std::collections::BTreeMap<alloy_primitives::Address, alloy_genesis::GenesisAccount>,
-) -> (
-    monad_execution_engine::types::StateDeltas,
-    monad_execution_engine::types::CodeMap,
-) {
-    use alloy_primitives::B256;
-    use monad_eth_types::EthAccount;
-    use monad_execution_engine::types::{AccountDelta, CodeMap, StateDeltas, StorageDelta};
-
-    let mut state_deltas = StateDeltas::new();
-    let mut code_map = CodeMap::new();
-
-    for (address, account) in alloc {
-        let code_hash = account.code.as_ref().map(|code| {
-            let hash = alloy_primitives::keccak256(code);
-            code_map.insert(hash, code.to_vec());
-            hash.0
-        });
-
-        let new_account = EthAccount {
-            nonce: account.nonce.unwrap_or(0),
-            balance: account.balance,
-            code_hash,
-            is_delegated: false,
-        };
-
-        let mut storage = HashMap::new();
-        if let Some(ref genesis_storage) = account.storage {
-            for (slot, value) in genesis_storage {
-                storage.insert(
-                    *slot,
-                    StorageDelta {
-                        old_value: B256::ZERO,
-                        new_value: *value,
-                    },
-                );
-            }
-        }
-
-        state_deltas.insert(
-            *address,
-            AccountDelta {
-                old_account: None,
-                new_account: Some(new_account),
-                storage,
-                incarnation_changed: false,
-            },
-        );
-    }
-
-    (state_deltas, code_map)
-}

@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
 use alloy_consensus::constants::KECCAK_EMPTY;
 use alloy_consensus::{ReceiptEnvelope, Typed2718, TxType};
+use alloy_genesis::GenesisAccount;
 use alloy_primitives::{Address, B256, U256};
 use reth_primitives_traits::Account;
 use revm::database::states::{
@@ -12,7 +15,7 @@ use revm::primitives::HashMap;
 use revm::state::AccountInfo;
 
 use monad_eth_types::EthAccount;
-use monad_execution_engine::types::{CodeMap, StateDeltas};
+use monad_execution_engine::types::{AccountDelta, CodeMap, StateDeltas, StorageDelta};
 
 /// Convert a monad `EthAccount` to reth's `Account`.
 pub fn monad_to_reth_account(acc: &EthAccount) -> Account {
@@ -148,4 +151,53 @@ pub fn state_deltas_to_bundle(
         state_size: 0,
         reverts_size,
     }
+}
+
+/// Convert an `alloy_genesis::Genesis.alloc` map into the internal
+/// `StateDeltas` + `CodeMap` representation used by `init_genesis`.
+pub fn genesis_alloc_to_state_deltas(
+    alloc: &BTreeMap<Address, GenesisAccount>,
+) -> (StateDeltas, CodeMap) {
+    let mut state_deltas = StateDeltas::new();
+    let mut code_map = CodeMap::new();
+
+    for (address, account) in alloc {
+        let code_hash = account.code.as_ref().map(|code| {
+            let hash = alloy_primitives::keccak256(code);
+            code_map.insert(hash, code.to_vec());
+            hash.0
+        });
+
+        let new_account = EthAccount {
+            nonce: account.nonce.unwrap_or(0),
+            balance: account.balance,
+            code_hash,
+            is_delegated: false,
+        };
+
+        let mut storage = HashMap::new();
+        if let Some(ref genesis_storage) = account.storage {
+            for (slot, value) in genesis_storage {
+                storage.insert(
+                    *slot,
+                    StorageDelta {
+                        old_value: B256::ZERO,
+                        new_value: *value,
+                    },
+                );
+            }
+        }
+
+        state_deltas.insert(
+            *address,
+            AccountDelta {
+                old_account: None,
+                new_account: Some(new_account),
+                storage,
+                incarnation_changed: false,
+            },
+        );
+    }
+
+    (state_deltas, code_map)
 }

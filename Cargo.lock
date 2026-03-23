@@ -5547,6 +5547,7 @@ name = "monad-execution-db"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-genesis",
  "alloy-primitives",
  "alloy-rlp",
  "criterion",
@@ -5804,7 +5805,6 @@ dependencies = [
  "monad-eth-block-policy",
  "monad-eth-block-validator",
  "monad-eth-txpool-executor",
- "monad-eth-types",
  "monad-execution-db",
  "monad-execution-engine",
  "monad-executor",

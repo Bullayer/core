@@ -20,7 +20,8 @@ use reth_storage_api::{
     AccountReader, DBProvider, HistoryWriter, StateProvider,
 };
 use rayon::prelude::*;
-use reth_trie::{HashedPostState, KeccakKeyHasher};
+use reth_trie::{HashedPostState, KeccakKeyHasher, StateRoot};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseTrieCursorFactory};
 use revm::database::states::BundleState;
 use tracing::{debug, error, info, warn};
 
@@ -242,6 +243,27 @@ impl RethExecutionDb {
         provider_rw.write_hashed_state(&hashed.into_sorted())?;
 
         DBProvider::commit(provider_rw)?;
+
+        let expected_root = header.state_root;
+        let provider_ro = self.factory.database_provider_ro()?;
+        let tx = provider_ro.tx_ref();
+        type DbStateRoot<'a, TX> = StateRoot<
+            DatabaseTrieCursorFactory<&'a TX>,
+            DatabaseHashedCursorFactory<&'a TX>,
+        >;
+        let computed_root = <DbStateRoot<'_, _> as DatabaseStateRoot<'_, _>>::from_tx(tx)
+            .root()
+            .map_err(|e| DbError::Internal(format!("state root computation failed: {e}")))?;
+
+        if computed_root != expected_root {
+            warn!(
+                ?computed_root,
+                ?expected_root,
+                "genesis state_root mismatch — header declares a different root; \
+                 this may be expected if genesis.json omits state_root"
+            );
+        }
+
         info!("genesis block initialized");
         Ok(())
     }

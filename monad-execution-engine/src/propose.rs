@@ -5,7 +5,7 @@
 use monad_consensus_types::block::ConsensusFullBlock;
 use monad_crypto::certificate_signature::{CertificateSignaturePubKey, CertificateSignatureRecoverable};
 use monad_eth_types::EthExecutionProtocol;
-use monad_types::{SeqNum, GENESIS_BLOCK_ID};
+use monad_types::SeqNum;
 use monad_validator::signature_collection::SignatureCollection;
 
 use crate::block_hash::BlockHashChain;
@@ -31,7 +31,6 @@ pub fn propose_block<ST, SCT>(
     block_hash_chain: &mut BlockHashChain,
     db: &mut dyn ExecutionDb,
     executor: &dyn BlockExecutor,
-    is_first_block: bool,
 ) -> Result<BlockExecOutput, ExecutionError>
 where
     ST: CertificateSignatureRecoverable,
@@ -44,10 +43,8 @@ where
     let block_hash_buffer = block_hash_chain.find_chain(&parent_id);
 
     static_validate_consensus(block)?;
-    // static_validate_block
 
-    let parent_block_id = if is_first_block { GENESIS_BLOCK_ID } else { parent_id };
-    db.set_block_and_prefix(seq_num - SeqNum(1), parent_block_id);
+    db.set_block_and_prefix(seq_num - SeqNum(1), parent_id);
 
     let body = &block.body().execution_body;
     let eth_block = Block {

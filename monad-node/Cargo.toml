@@ -20,7 +20,6 @@ monad-crypto = { workspace = true }
 monad-dataplane = { workspace = true }
 monad-eth-block-policy = { workspace = true }
 monad-eth-block-validator = { workspace = true }
-monad-eth-types = { workspace = true }
 monad-eth-txpool-executor = { workspace = true }
 monad-rpc = { workspace = true }
 monad-execution-db = { workspace = true }

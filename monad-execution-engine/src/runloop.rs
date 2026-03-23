@@ -65,8 +65,7 @@ where
     }
     let mut block_hash_chain = BlockHashChain::new(block_hash_buffer);
 
-    let start_seq_num = if finalized_n == SeqNum::MAX { SeqNum(0) } else { finalized_n };
-    let mut last_finalized_seq_num = start_seq_num;
+    let mut last_finalized_seq_num = if finalized_n == SeqNum::MAX { SeqNum(0) } else { finalized_n };
 
     let mut to_execute: VecDeque<ToExecute<ST, SCT>> = VecDeque::new();
     let mut to_finalize: VecDeque<ToFinalize> = VecDeque::new();
@@ -127,7 +126,6 @@ where
                 &mut block_hash_chain,
                 &mut db,
                 &*executor,
-                seq_num == start_seq_num,
             ) {
                 Ok(output) => {
                     db.update_proposed_metadata(seq_num, item.block_id);
@@ -167,23 +165,31 @@ where
                 block_id = ?item.block_id,
                 "processing finalization"
             );
+
+            let hash_chain_ok = block_hash_chain.finalize(item.block_id);
+
             db.finalize(item.seq_num, item.block_id);
-            block_hash_chain.finalize(item.block_id);
             last_finalized_seq_num = item.seq_num;
+
+            if !hash_chain_ok {
+                tracing::error!(
+                    seq_num = item.seq_num.0,
+                    block_id = ?item.block_id,
+                    "block_hash_chain out of sync: block was not in proposals"
+                );
+                continue;
+            }
 
             let _ = event_tx.send(ExecutionEvent::BlockFinalized {
                 seq_num: item.seq_num,
                 block_id: item.block_id,
             });
 
-            // Finalization implies the block's own execution is verified.
             db.update_verified_block(item.seq_num);
             let _ = event_tx.send(ExecutionEvent::BlockVerified {
                 seq_num: item.seq_num,
             });
 
-            // Additionally verify any delayed execution results carried by this block,
-            // as long as they differ from the block being finalized.
             if let Some(&last_verified) = item.verified_blocks.last() {
                 if last_verified != SeqNum::MAX && last_verified != item.seq_num {
                     db.update_verified_block(last_verified);

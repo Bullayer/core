@@ -262,7 +262,10 @@ impl BlockHashChain {
     /// Finalize a block: write exactly ONE hash to the finalized buffer and prune old proposals.
     /// C++: to_finalize = buf_.n(); buf_.set(to_finalize, winner.buf.get(to_finalize));
     /// Then erase proposals with seq_num <= winner's seq_num.
-    pub fn finalize(&mut self, block_id: BlockId) {
+    ///
+    /// Returns `true` if the block was found in proposals and finalized,
+    /// `false` if the block was not proposed (hash chain state unchanged).
+    pub fn finalize(&mut self, block_id: BlockId) -> bool {
         let to_finalize = self.finalized.n();
 
         let winner_pos = self
@@ -273,13 +276,11 @@ impl BlockHashChain {
         let pos = match winner_pos {
             Some(p) => p,
             None => {
-                // Block was not proposed (e.g. skipped during execution validation).
-                // Log and skip — the finalized buffer stays at its current n.
                 tracing::warn!(
                     ?block_id,
                     "BlockHashChain::finalize: block_id not in proposals, skipping"
                 );
-                return;
+                return false;
             }
         };
 
@@ -300,6 +301,8 @@ impl BlockHashChain {
 
         self.proposals
             .retain(|p| p.seq_num > winner_seq_num);
+
+        true
     }
 }
 
