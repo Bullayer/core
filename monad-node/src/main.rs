@@ -397,8 +397,6 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
         )
         .collect();
 
-    let mut last_ledger_tip: Option<SeqNum> = None;
-
     let builder = MonadStateBuilder {
         validator_set_factory: ValidatorSetFactory::default(),
         leader_election: WeightedRoundRobin::default(),
@@ -431,11 +429,13 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
     };
 
     let (mut state, init_commands) = builder.build();
+    info!("init_commands: {:?}", init_commands);
     executor.exec(init_commands);
 
+    let mut last_ledger_tip: Option<SeqNum> = None;
+
     let mut ledger_span = tracing::info_span!(
-        "ledger_span",
-        last_ledger_tip = last_ledger_tip.map(|s| s.as_u64())
+        "ledger_span", last_ledger_tip = last_ledger_tip.map(|s| s.as_u64())
     );
 
     let (maybe_otel_meter_provider, mut maybe_metrics_ticker) = node_state
@@ -486,7 +486,7 @@ async fn run(node_state: NodeState) -> Result<(), ()> {
             }
             _ = match &mut maybe_metrics_ticker {
                 Some(ticker) => ticker.tick().boxed(),
-                None => futures_util::future::pending().boxed(),
+                None => futures_util::future::pending().boxed()
             } => {
                 let otel_meter = maybe_otel_meter.as_ref().expect("otel_endpoint must have been set");
                 let state_metrics = state.metrics();

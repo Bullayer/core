@@ -456,8 +456,7 @@ impl<'a, PT: PubKey> BroadcastGroup<'a, PT> {
     }
 }
 
-// Similar to std::iter::Extend trait but implemented for FnMut as
-// well.
+// Similar to std::iter::Extend trait but implemented for FnMut as well
 pub trait Collector<T> {
     fn push(&mut self, item: T);
     fn reserve(&mut self, _additional: usize) {}

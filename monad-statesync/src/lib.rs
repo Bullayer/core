@@ -250,9 +250,7 @@ where
                     let statesync = match &mut self.mode {
                         StateSyncMode::Sync(sync) => sync,
                         StateSyncMode::Live(_) => {
-                            tracing::warn!(
-                                "dropping statesync expand upstream peers, already done syncing"
-                            );
+                            tracing::warn!("dropping statesync expand upstream peers, already done syncing");
                             continue;
                         }
                     };

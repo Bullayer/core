@@ -69,9 +69,8 @@ where
         last_round_certificate: Option<RoundCertificate<ST, SCT, EPT>>,
     ) -> Self {
         let timeout_digest = alloy_rlp::encode(&timeout);
-        let timeout_signature = <SCT::SignatureType as CertificateSignature>::sign::<
-            signing_domain::Timeout,
-        >(&timeout_digest, cert_keypair);
+        let timeout_signature = 
+            <SCT::SignatureType as CertificateSignature>::sign::<signing_domain::Timeout>(&timeout_digest, cert_keypair);
 
         let high_extend = match high_extend {
             HighExtend::Qc(qc) => HighExtendVote::Qc(qc),

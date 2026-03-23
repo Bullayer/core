@@ -165,7 +165,6 @@ pub trait Message: Clone + Send + Sync {
     type NodeIdPubKey: PubKey;
     type Event: Send + Sync;
 
-    // TODO-3 NodeId -> &NodeId
     fn event(self, from: NodeId<Self::NodeIdPubKey>) -> Self::Event;
 
     fn event_with_source(

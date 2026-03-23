@@ -213,7 +213,7 @@ where
         };
 
         // Return commands before being wrapped into a Vec of WrappedConsensusCommand
-        let consensus_cmds = match event {
+        let consensus_cmds: Vec<ConsensusCommand<ST, SCT, EPT, BPT, SBT, CCT, CRT>> = match event {
             ConsensusEvent::Message {
                 sender,
                 unverified_message,

@@ -436,7 +436,7 @@ where
                 "txpool received out of order committed block"
             );
         }
-        self.last_commit = Some(committed_block.header().clone());
+        self.last_commit = Some((*committed_block.header()).clone());
 
         let execution_revision = chain_config
             .get_execution_chain_revision(committed_block.header().execution_inputs.timestamp);
@@ -464,7 +464,7 @@ where
     ) {
         self.last_commit = last_delay_committed_blocks
             .last()
-            .map(|block| block.header().clone());
+            .map(|block| (*block.header()).clone());
 
         let execution_revision = chain_config.get_execution_chain_revision(
             last_delay_committed_blocks

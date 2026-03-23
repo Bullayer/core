@@ -1473,7 +1473,7 @@ where
             .map(|full_block| {
                 self.block_validator
                     .validate(
-                        full_block.header().clone(),
+                        (*full_block.header()).clone(),
                         full_block.body().clone(),
                         // we don't need to validate bls pubkey fields (randao)
                         // this is because these blocks are already committed by majority
@@ -1488,8 +1488,7 @@ where
             .collect();
 
         // reset block_policy and txpool
-        self.block_policy
-            .reset(last_two_delay_committed_blocks.iter().collect());
+        self.block_policy.reset(last_two_delay_committed_blocks.iter().collect());
         commands.push(Command::TxPoolCommand(TxPoolCommand::Reset {
             last_delay_committed_blocks: last_two_delay_committed_blocks.clone(),
         }));

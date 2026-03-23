@@ -146,26 +146,16 @@ where
             config_reload_cmds,
         ) = Command::split_commands(commands);
 
-        guard
-            .metrics
-            .record(GAUGE_ROUTER_TOTAL_EXEC_US, || self.router.exec(router_cmds));
+        guard.metrics.record(GAUGE_ROUTER_TOTAL_EXEC_US, || self.router.exec(router_cmds));
         self.timer.exec(timer_cmds);
-        guard
-            .metrics
-            .record(GAUGE_LEDGER_TOTAL_EXEC_US, || self.ledger.exec(ledger_cmds));
-        guard.metrics.record(GAUGE_CONFIG_FILE_TOTAL_EXEC_US, || {
-            self.config_file.exec(config_file_cmds)
-        });
+        guard.metrics.record(GAUGE_LEDGER_TOTAL_EXEC_US, || self.ledger.exec(ledger_cmds));
+        guard.metrics.record(GAUGE_CONFIG_FILE_TOTAL_EXEC_US, || self.config_file.exec(config_file_cmds));
         self.val_set.exec(val_set_cmds);
         self.timestamp.exec(timestamp_cmds);
-        guard
-            .metrics
-            .record(GAUGE_TXPOOL_TOTAL_EXEC_US, || self.txpool.exec(txpool_cmds));
+        guard.metrics.record(GAUGE_TXPOOL_TOTAL_EXEC_US, || self.txpool.exec(txpool_cmds));
         self.control_panel.exec(control_panel_cmds);
         self.loopback.exec(loopback_cmds);
-        guard.metrics.record(GAUGE_STATESYNC_TOTAL_EXEC_US, || {
-            self.state_sync.exec(state_sync_cmds)
-        });
+        guard.metrics.record(GAUGE_STATESYNC_TOTAL_EXEC_US, || self.state_sync.exec(state_sync_cmds));
         self.config_loader.exec(config_reload_cmds);
     }
 
